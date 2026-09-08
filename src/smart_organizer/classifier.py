@@ -7,7 +7,7 @@ case-insensitive, and cross-platform manner.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional, Set, Union
 
 # Centralized default extension-to-category mappings
 DEFAULT_CATEGORY_EXTENSIONS: Dict[str, List[str]] = {
@@ -39,7 +39,7 @@ DEFAULT_CATEGORY_EXTENSIONS: Dict[str, List[str]] = {
     ],
     "Archives": [
         ".zip", ".rar", ".7z", ".tar", ".gz", ".bz2", ".xz",
-        ".tgz", ".tbz2", ".z", ".iso", ".dmg",
+        ".tgz", ".tbz2", ".z", ".iso",
     ],
     "Code": [
         ".py", ".js", ".ts", ".jsx", ".tsx", ".java", ".c", ".cpp",
@@ -106,7 +106,7 @@ class FileClassifier:
         """Returns set of all known category folder names."""
         return self._category_names | {DEFAULT_FALLBACK_CATEGORY}
 
-    def is_temporary_file(self, path: Path | str) -> bool:
+    def is_temporary_file(self, path: Union[Path, str]) -> bool:
         """Determines if the given file has a temporary or incomplete download extension."""
         name = Path(path).name.lower()
         # Check direct suffix
@@ -121,7 +121,7 @@ class FileClassifier:
 
         return False
 
-    def classify_file(self, path: Path | str) -> str:
+    def classify_file(self, path: Union[Path, str]) -> str:
         """Determines category for a given path.
 
         Case-insensitive matching. Defaults to 'Others' for unknown extensions.
@@ -138,13 +138,13 @@ class FileClassifier:
 _DEFAULT_CLASSIFIER = FileClassifier()
 
 
-def is_temporary_download(path: Path | str) -> bool:
+def is_temporary_download(path: Union[Path, str]) -> bool:
     """Helper to check if a file is an incomplete download."""
     return _DEFAULT_CLASSIFIER.is_temporary_file(path)
 
 
 def classify_file(
-    path: Path | str,
+    path: Union[Path, str],
     custom_categories: Optional[Dict[str, List[str]]] = None,
 ) -> str:
     """Convenience helper to classify a file path."""

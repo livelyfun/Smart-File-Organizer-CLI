@@ -7,8 +7,9 @@ asynchronous stability checks for newly created or completed download files.
 from __future__ import annotations
 
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Callable, Set
+from typing import Callable, Optional, Set, Union
 
 from watchdog.events import FileSystemEvent, FileSystemEventHandler
 from watchdog.observers import Observer
@@ -26,12 +27,14 @@ class DownloadEventHandler(FileSystemEventHandler):
         config: AppConfig,
         classifier: FileClassifier,
         on_file_ready: Callable[[Path], None],
+        executor: Optional[ThreadPoolExecutor] = None,
     ):
         super().__init__()
         self.config = config
         self.classifier = classifier
         self.on_file_ready = on_file_ready
         self.watch_dir = config.resolved_watch_directory
+        self._executor = executor
         self._processing_lock = threading.Lock()
         self._active_files: Set[Path] = set()
 
@@ -67,7 +70,7 @@ class DownloadEventHandler(FileSystemEventHandler):
                 stability_checks=self.config.stability_checks,
                 max_wait_time=self.config.max_stability_wait,
             )
-            if is_stable and file_path.exists():
+            if is_stable and file_path.exists() and file_path.is_file():
                 self.on_file_ready(file_path)
         finally:
             with self._processing_lock:
@@ -84,12 +87,20 @@ class DownloadEventHandler(FileSystemEventHandler):
                 return
             self._active_files.add(path)
 
-        thread = threading.Thread(
-            target=self._process_candidate_file_async,
-            args=(path,),
-            daemon=True,
-        )
-        thread.start()
+        if self._executor is not None:
+            try:
+                self._executor.submit(self._process_candidate_file_async, path)
+            except RuntimeError:
+                # Executor already shut down
+                with self._processing_lock:
+                    self._active_files.discard(path)
+        else:
+            thread = threading.Thread(
+                target=self._process_candidate_file_async,
+                args=(path,),
+                daemon=True,
+            )
+            thread.start()
 
     def on_created(self, event: FileSystemEvent) -> None:
         if event.is_directory:
@@ -99,7 +110,12 @@ class DownloadEventHandler(FileSystemEventHandler):
     def on_moved(self, event: FileSystemEvent) -> None:
         if event.is_directory:
             return
-        # Downloads frequently rename from .crdownload to .pdf upon completion
+        # Downloads frequently rename from .crdownload to final filename upon completion.
+        # Defensively remove the source path from active tracking in case it was enqueued.
+        src_path = Path(event.src_path)
+        with self._processing_lock:
+            self._active_files.discard(src_path)
+
         dest_path = getattr(event, "dest_path", None)
         if dest_path:
             self._handle_path_candidate(dest_path)
@@ -113,10 +129,12 @@ class DirectoryWatcher:
         config: AppConfig,
         classifier: FileClassifier,
         on_file_ready: Callable[[Path], None],
+        max_workers: int = 8,
     ):
         self.config = config
         self.watch_dir = config.resolved_watch_directory
-        self.handler = DownloadEventHandler(config, classifier, on_file_ready)
+        self.executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="WatcherWorker")
+        self.handler = DownloadEventHandler(config, classifier, on_file_ready, executor=self.executor)
         self.observer = Observer()
 
     def start(self) -> None:
@@ -128,6 +146,8 @@ class DirectoryWatcher:
         self.observer.start()
 
     def stop(self) -> None:
-        """Stops the observer cleanly."""
+        """Stops the observer and worker pool cleanly."""
         self.observer.stop()
         self.observer.join()
+        self.executor.shutdown(wait=False, cancel_futures=True)
+

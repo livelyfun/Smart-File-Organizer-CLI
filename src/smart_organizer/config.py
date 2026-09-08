@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from smart_organizer.platform_utils import (
     expand_path,
@@ -119,8 +119,8 @@ def save_config(config: AppConfig, path: Optional[Path] = None) -> Path:
 
 
 def load_config(
-    config_path: Optional[str | Path] = None,
-    watch_dir_override: Optional[str | Path] = None,
+    config_path: Optional[Union[str, Path]] = None,
+    watch_dir_override: Optional[Union[str, Path]] = None,
     auto_create_default: bool = True,
 ) -> AppConfig:
     """Loads configuration from specified or default location, applying overrides.

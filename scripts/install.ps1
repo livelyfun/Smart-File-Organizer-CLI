@@ -55,7 +55,11 @@ $organizerExe = Join-Path $venvDir "Scripts\smart-organizer.exe"
 
 Write-Host "Installing Smart File Organizer..." -ForegroundColor Yellow
 & $pipExe install --upgrade pip | Out-Null
-& $pipExe install $scriptDir | Out-Null
+& $pipExe install --force-reinstall $scriptDir
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "Package installation failed. Check the output above for details."
+    exit 1
+}
 
 # 5. Create launcher batch script in binDir
 if (-not (Test-Path $binDir)) {

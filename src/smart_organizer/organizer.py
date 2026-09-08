@@ -34,7 +34,16 @@ class SmartFileOrganizer:
         self._stats_lock = threading.Lock()
         self.organized_count = 0
         self.skipped_count = 0
-        self.error_count = 0
+        self.failed_count = 0
+
+    @property
+    def error_count(self) -> int:
+        """Alias for failed_count to preserve backward compatibility."""
+        return self.failed_count
+
+    @error_count.setter
+    def error_count(self, value: int) -> None:
+        self.failed_count = value
 
     def organize_single_file(self, file_path: Path) -> bool:
         """Organizes a single file into its appropriate category directory.
@@ -86,7 +95,7 @@ class SmartFileOrganizer:
             return True
         else:
             with self._stats_lock:
-                self.error_count += 1
+                self.failed_count += 1
             err = result.error_message or "Unknown error"
             self.logger.log_error(
                 filename=file_path.name,
@@ -99,14 +108,15 @@ class SmartFileOrganizer:
         """Scans the root watch directory and organizes existing files directly inside it.
 
         Does not recursively scan category directories.
+        Returns a dict with 'organized', 'skipped', 'failed', and 'errors' counts.
         """
         watch_dir = self.config.resolved_watch_directory
         if not watch_dir.exists():
             error_msg = f"Watch directory does not exist: {watch_dir}"
             print(f"Error: {error_msg}", file=sys.stderr)
-            return {"organized": 0, "errors": 1, "skipped": 0}
+            return {"organized": 0, "skipped": 0, "failed": 1}
 
-        stats = {"organized": 0, "errors": 0, "skipped": 0}
+        stats = {"organized": 0, "skipped": 0, "failed": 0}
 
         try:
             for entry in sorted(watch_dir.iterdir()):
@@ -116,24 +126,55 @@ class SmartFileOrganizer:
 
                 # Skip hidden files
                 if self.config.ignore_hidden_files and entry.name.startswith("."):
+                    with self._stats_lock:
+                        self.skipped_count += 1
                     stats["skipped"] += 1
                     continue
 
                 # Skip temporary download files
                 if self.classifier.is_temporary_file(entry):
                     self.logger.log_skipped(entry.name, "temporary download")
+                    with self._stats_lock:
+                        self.skipped_count += 1
                     stats["skipped"] += 1
                     continue
 
-                success = self.organize_single_file(entry)
-                if success:
+                category = self.classifier.classify_file(entry)
+                dest_dir = self.file_manager.get_destination_dir(
+                    self.config.resolved_watch_directory,
+                    category,
+                )
+                result = self.file_manager.safe_move(
+                    source_path=entry,
+                    destination_dir=dest_dir,
+                    category=category,
+                )
+
+                if result.success and result.destination_path:
+                    with self._stats_lock:
+                        self.organized_count += 1
                     stats["organized"] += 1
+                    rel_dest = f"{category}/{result.destination_path.name}"
+                    self.logger.log_organized(
+                        filename=entry.name,
+                        category=category,
+                        dest_rel_path=rel_dest,
+                        full_dest_path=str(result.destination_path),
+                    )
                 else:
-                    stats["errors"] += 1
+                    with self._stats_lock:
+                        self.failed_count += 1
+                    stats["failed"] += 1
+                    err = result.error_message or "Unknown error"
+                    self.logger.log_error(
+                        filename=entry.name,
+                        error_message=err,
+                        category=category,
+                    )
 
         except PermissionError:
             print(f"Permission denied accessing directory: {watch_dir}", file=sys.stderr)
-            stats["errors"] += 1
+            stats["failed"] += 1
 
         return stats
 
@@ -171,7 +212,9 @@ class SmartFileOrganizer:
                 "log_file": str(self.config.resolved_log_file) if self.config.resolved_log_file else None,
                 "organized_count": self.organized_count,
                 "skipped_count": self.skipped_count,
-                "error_count": self.error_count,
+                "failed_count": self.failed_count,
+                "error_count": self.failed_count,
                 "stability_delay": self.config.stability_delay,
                 "stability_checks": self.config.stability_checks,
             }
+

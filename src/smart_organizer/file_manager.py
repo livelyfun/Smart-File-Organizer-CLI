@@ -7,9 +7,10 @@ filename resolution, and robust error handling.
 from __future__ import annotations
 
 import shutil
+import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Union
 
 # Known multi-part archive extensions for clean duplicate naming
 KNOWN_DOUBLE_EXTENSIONS = (
@@ -74,6 +75,7 @@ class FileManager:
 
     def __init__(self, create_dirs: bool = True):
         self.create_dirs = create_dirs
+        self._move_lock = threading.Lock()
 
     def get_destination_dir(self, base_dir: Path, category: str) -> Path:
         """Returns the destination directory path for a category."""
@@ -81,8 +83,8 @@ class FileManager:
 
     def safe_move(
         self,
-        source_path: Path | str,
-        destination_dir: Path | str,
+        source_path: Union[Path, str],
+        destination_dir: Union[Path, str],
         category: Optional[str] = None,
     ) -> MoveResult:
         """Safely moves a file to the destination directory with duplicate protection.
@@ -134,47 +136,49 @@ class FileManager:
                 error_message=f"Filesystem error creating directory {dest_dir}: {exc}",
             )
 
-        # 3. Generate duplicate-safe target path
-        try:
-            target_path = generate_unique_destination_path(dest_dir, src.name)
-        except Exception as exc:
-            return MoveResult(
-                success=False,
-                source_path=src,
-                category=category,
-                error_message=f"Failed to generate unique destination filename: {exc}",
-            )
+        # 3. Thread-safely resolve non-conflicting destination and move
+        with self._move_lock:
+            try:
+                target_path = generate_unique_destination_path(dest_dir, src.name)
+            except Exception as exc:
+                return MoveResult(
+                    success=False,
+                    source_path=src,
+                    category=category,
+                    error_message=f"Failed to generate unique destination filename: {exc}",
+                )
 
-        # 4. Perform atomic/safe move using shutil.move (never shell commands)
-        try:
-            shutil.move(str(src), str(target_path))
-            return MoveResult(
-                success=True,
-                source_path=src,
-                destination_path=target_path,
-                category=category,
-            )
-        except PermissionError:
-            return MoveResult(
-                success=False,
-                source_path=src,
-                destination_path=target_path,
-                category=category,
-                error_message="Permission denied while moving file",
-            )
-        except FileNotFoundError:
-            return MoveResult(
-                success=False,
-                source_path=src,
-                destination_path=target_path,
-                category=category,
-                error_message="File disappeared before move could complete",
-            )
-        except OSError as exc:
-            return MoveResult(
-                success=False,
-                source_path=src,
-                destination_path=target_path,
-                category=category,
-                error_message=f"Filesystem error during move: {exc}",
-            )
+            # 4. Perform atomic/safe move using shutil.move (never shell commands)
+            try:
+                shutil.move(str(src), str(target_path))
+                return MoveResult(
+                    success=True,
+                    source_path=src,
+                    destination_path=target_path,
+                    category=category,
+                )
+            except PermissionError:
+                return MoveResult(
+                    success=False,
+                    source_path=src,
+                    destination_path=target_path,
+                    category=category,
+                    error_message="Permission denied while moving file",
+                )
+            except FileNotFoundError:
+                return MoveResult(
+                    success=False,
+                    source_path=src,
+                    destination_path=target_path,
+                    category=category,
+                    error_message="File disappeared before move could complete",
+                )
+            except OSError as exc:
+                return MoveResult(
+                    success=False,
+                    source_path=src,
+                    destination_path=target_path,
+                    category=category,
+                    error_message=f"Filesystem error during move: {exc}",
+                )
+

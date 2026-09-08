@@ -8,6 +8,7 @@ from __future__ import annotations
 import os
 import sys
 from pathlib import Path
+from typing import Union
 
 
 def get_platform_name() -> str:
@@ -41,7 +42,7 @@ def get_default_downloads_dir() -> Path:
                     line = line.strip()
                     if line.startswith("XDG_DOWNLOAD_DIR="):
                         val = line.split("=", 1)[1].strip('"').strip("'")
-                        val = val.replace("$HOME", str(home))
+                        val = val.replace("$HOME", str(home)).replace("${HOME}", str(home))
                         resolved = Path(val).resolve()
                         if resolved.exists():
                             return resolved
@@ -105,7 +106,8 @@ def get_log_dir() -> Path:
         return home / ".local" / "state" / "smart_organizer"
 
 
-def expand_path(path_str: str | Path) -> Path:
+def expand_path(path_str: Union[str, Path]) -> Path:
     """Safely expands '~' and environment variables into an absolute Path."""
     expanded_str = os.path.expandvars(str(path_str))
     return Path(expanded_str).expanduser().resolve()
+

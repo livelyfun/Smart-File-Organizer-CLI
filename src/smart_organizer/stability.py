@@ -7,11 +7,11 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Optional, Union
 
 
 def wait_for_file_stability(
-    file_path: Path | str,
+    file_path: Union[Path, str],
     stability_delay: float = 2.0,
     stability_checks: int = 2,
     max_wait_time: float = 60.0,
@@ -44,9 +44,15 @@ def wait_for_file_stability(
 
         try:
             current_size = path.stat().st_size
-        except OSError:
-            # File might be locked or momentarily inaccessible by OS
+        except FileNotFoundError:
             return False
+        except OSError:
+            # File might be locked or momentarily inaccessible by OS during active write stream
+            consecutive_stable_count = 0
+            last_size = None
+            sleep_fn(stability_delay)
+            elapsed_time += stability_delay
+            continue
 
         if last_size is not None and current_size == last_size:
             consecutive_stable_count += 1
@@ -60,3 +66,4 @@ def wait_for_file_stability(
         elapsed_time += stability_delay
 
     return consecutive_stable_count >= stability_checks
+

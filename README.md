@@ -74,7 +74,7 @@ When you download files, they are automatically organized into category folders:
 | `smart-organizer` | Starts continuous real-time monitoring of your Downloads folder. |
 | `smart-organizer --organize-existing` | Scans and organizes files already sitting in Downloads once, then exits cleanly. |
 | `smart-organizer --watch-directory PATH` | Watches or organizes a custom directory instead of standard Downloads. |
-| `smart-organizer --status` | Displays active configuration, watch directory, and log file status. |
+| `smart-organizer --status` | Shows current configuration and watch directory accessibility. Does not report runtime process state. |
 | `smart-organizer --config-file PATH` | Loads a custom JSON configuration file. |
 | `smart-organizer --version` | Displays application version number. |
 | `smart-organizer --help` | Shows command options and descriptions. |
@@ -94,7 +94,7 @@ Extensions are matched **case-insensitively**. Unrecognized files safely go into
 | **Documents** | `.doc`, `.docx`, `.odt`, `.rtf`, `.txt`, `.md`, `.tex`, `.epub`, `.pages`, `.wpd`, `.log` |
 | **Spreadsheets** | `.xls`, `.xlsx`, `.ods`, `.csv`, `.tsv`, `.numbers`, `.xlsm` |
 | **Presentations** | `.ppt`, `.pptx`, `.odp`, `.key`, `.pps`, `.ppsx` |
-| **Archives** | `.zip`, `.rar`, `.7z`, `.tar`, `.gz`, `.bz2`, `.xz`, `.tgz`, `.tbz2`, `.iso`, `.dmg` |
+| **Archives** | `.zip`, `.rar`, `.7z`, `.tar`, `.gz`, `.bz2`, `.xz`, `.tgz`, `.tbz2`, `.iso` |
 | **Code** | `.py`, `.js`, `.ts`, `.jsx`, `.tsx`, `.java`, `.c`, `.cpp`, `.cs`, `.rs`, `.go`, `.php`, `.rb`, `.swift`, `.kt`, `.sh`, `.bash`, `.zsh`, `.fish`, `.html`, `.css`, `.json`, `.xml`, `.yaml`, `.toml`, `.sql` |
 | **Applications** | `.deb`, `.rpm`, `.appimage`, `.exe`, `.msi`, `.dmg`, `.pkg`, `.apk`, `.flatpakref`, `.snap` |
 | **Others** | Any unrecognized file type or file without an extension (e.g. `unknown.xyz`, `LICENSE`) |
@@ -144,7 +144,8 @@ The file is generated automatically on first run.
     ".part",
     ".partial",
     ".download",
-    ".tmp"
+    ".tmp",
+    ".crswap"
   ],
   "log_file": "~/.local/state/smart_organizer/organizer.log",
   "custom_categories": {
@@ -193,7 +194,9 @@ The file is generated automatically on first run.
        <string>com.smartfileorganizer.agent</string>
        <key>ProgramArguments</key>
        <array>
-           <string>/Users/YOUR_USERNAME/.local/bin/smart-organizer</string>
+           <string>/bin/bash</string>
+           <string>-c</string>
+           <string>exec "$HOME/.local/bin/smart-organizer"</string>
        </array>
        <key>RunAtLoad</key>
        <true/>

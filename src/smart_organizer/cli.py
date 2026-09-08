@@ -12,7 +12,7 @@ import threading
 from typing import Optional, Sequence
 
 from smart_organizer import __version__
-from smart_organizer.config import AppConfig, load_config
+from smart_organizer.config import AppConfig, get_default_config_path, load_config
 from smart_organizer.logger import setup_logger
 from smart_organizer.organizer import SmartFileOrganizer
 
@@ -47,7 +47,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--status",
         action="store_true",
-        help="Display current application status and configuration.",
+        help=(
+            "Show current configuration and watch directory accessibility. "
+            "Does not report whether the watcher process is running."
+        ),
     )
     parser.add_argument(
         "--version",
@@ -59,20 +62,38 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def display_status(config: AppConfig) -> None:
-    """Displays detailed configuration and directory status."""
+def display_status(config: AppConfig, custom_config_path: Optional[str] = None) -> None:
+    """Displays detailed configuration and directory accessibility status."""
     watch_dir = config.resolved_watch_directory
     exists = watch_dir.exists()
 
-    print(f"\nSmart File Organizer v{__version__} Status\n")
-    print(f"  Watch Directory      : {watch_dir}")
-    print(f"  Directory Exists     : {'Yes' if exists else 'No (Missing)'}")
+    if exists:
+        try:
+            # Check write permission
+            test_file = watch_dir / ".smart_organizer_probe"
+            test_file.touch()
+            test_file.unlink()
+            dir_status = "Exists (Writable)"
+        except Exception:
+            dir_status = "Exists (Read-Only / No Write Access)"
+    else:
+        dir_status = "Missing (Directory does not exist)"
+
+    cfg_file = config.resolved_log_file  # used for log check
+    config_source = custom_config_path if custom_config_path else str(get_default_config_path())
+
+    print(f"\nSmart File Organizer v{__version__} - Configuration & Directory Status\n")
+    print(f"  Watch Directory      : {watch_dir} [{dir_status}]")
+    print(f"  Configuration File   : {config_source}")
     print(f"  Stability Delay      : {config.stability_delay}s")
     print(f"  Stability Checks     : {config.stability_checks} checks")
-    print(f"  Max Wait Time        : {config.max_stability_wait}s")
+    print(f"  Max Stability Wait   : {config.max_stability_wait}s")
     print(f"  Ignore Hidden Files  : {config.ignore_hidden_files}")
     print(f"  Log File             : {config.resolved_log_file or 'None'}")
     print(f"  Temporary Extensions : {', '.join(config.temporary_extensions)}")
+    print()
+    print("  Note: Runtime metrics (files organized, errors) are only available")
+    print("        while the watcher is actively monitoring.")
 
     if config.custom_categories:
         print("\n  Custom Categories:")
@@ -96,7 +117,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return 1
 
     if args.status:
-        display_status(config)
+        display_status(config, custom_config_path=args.config_file)
         return 0
 
     watch_dir = config.resolved_watch_directory
@@ -123,9 +144,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
         print(
             f"\nOrganization complete: {stats['organized']} organized, "
-            f"{stats['skipped']} skipped, {stats['errors']} errors.\n"
+            f"{stats['skipped']} skipped, {stats['failed']} failed.\n"
         )
-        return 0 if stats["errors"] == 0 else 1
+        return 0 if stats["failed"] == 0 else 1
 
     # Live Monitoring Mode
     print(f"Smart File Organizer v{__version__}\n")
@@ -159,3 +180,4 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+

@@ -41,7 +41,7 @@ def test_organize_existing_files_comprehensive(sample_config: AppConfig, temp_wa
 
     assert stats["organized"] == 12
     assert stats["skipped"] >= 2  # hidden file + .crdownload
-    assert stats["errors"] == 0
+    assert stats["failed"] == 0
 
     # Verify destinations
     assert (temp_watch_dir / "Images" / "photo.jpg").exists()
@@ -84,4 +84,4 @@ def test_organize_missing_directory(tmp_path: Path):
     cfg = AppConfig(watch_directory=str(missing_dir))
     organizer = SmartFileOrganizer(cfg)
     stats = organizer.organize_existing_files()
-    assert stats["errors"] == 1
+    assert stats["failed"] == 1

@@ -1,37 +1,47 @@
-# Python
+# Python bytecode
 __pycache__/
 *.py[cod]
 *$py.class
-*.so
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
 
-# Virtual Environments
+# Virtual environments
 .venv/
-env/
 venv/
+env/
 ENV/
 
-# Testing & Tools
+# Packaging/build artifacts
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Test / coverage
 .pytest_cache/
 .coverage
+.coverage.*
 htmlcov/
+.tox/
+.nox/
 
-# Logs & OS
-*.log
+# Type checkers / linters
+.mypy_cache/
+.pyre/
+.ruff_cache/
+
+# IDE / editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
 .DS_Store
 Thumbs.db
+desktop.ini
+
+# Application runtime files
+*.log
+
+# Local application configuration
+config.local.json
+.local/
