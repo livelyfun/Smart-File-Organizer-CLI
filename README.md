@@ -184,9 +184,12 @@ The file is generated automatically on first run.
 
 ### Linux (systemd User Service)
 
-1. Create `~/.config/systemd/user/smart-organizer.service`:
+1. **Create the service directory** (if it doesn't already exist) and **save the unit file** directly into it in one step:
 
-```ini
+```bash
+mkdir -p ~/.config/systemd/user
+
+cat > ~/.config/systemd/user/smart-organizer.service << 'EOF'
 [Unit]
 Description=Smart File Organizer Service
 After=default.target
@@ -199,20 +202,33 @@ RestartSec=5s
 
 [Install]
 WantedBy=default.target
+EOF
 ```
 
-2. Enable and start:
+> Prefer a text editor? Run `mkdir -p ~/.config/systemd/user && nano ~/.config/systemd/user/smart-organizer.service`, paste the `[Unit]`/`[Service]`/`[Install]` block above, then save (`Ctrl+O`, `Enter`, `Ctrl+X`).
 
-```
+2. Reload systemd so it picks up the new file, then enable and start the service:
+
+```bash
 systemctl --user daemon-reload
 systemctl --user enable --now smart-organizer.service
 ```
 
+3. Verify it saved to the right location and is active:
+
+```bash
+ls -l ~/.config/systemd/user/smart-organizer.service
+systemctl --user status smart-organizer.service
+```
+
 ### macOS (launchd User Agent)
 
-1. Create `~/Library/LaunchAgents/com.smartfileorganizer.agent.plist`:
+1. **Create the LaunchAgents directory** (if it doesn't already exist) and **save the plist file** directly into it:
 
-```xml
+```bash
+mkdir -p ~/Library/LaunchAgents
+
+cat > ~/Library/LaunchAgents/com.smartfileorganizer.agent.plist << 'EOF'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -231,20 +247,66 @@ systemctl --user enable --now smart-organizer.service
     <true/>
 </dict>
 </plist>
+EOF
 ```
 
-2. Load agent:
+> Prefer a text editor? Run `mkdir -p ~/Library/LaunchAgents && nano ~/Library/LaunchAgents/com.smartfileorganizer.agent.plist`, paste the XML above, then save.
 
-```
+2. Load the agent:
+
+```bash
 launchctl load ~/Library/LaunchAgents/com.smartfileorganizer.agent.plist
+```
+
+3. Verify it saved to the right location and is loaded:
+
+```bash
+ls -l ~/Library/LaunchAgents/com.smartfileorganizer.agent.plist
+launchctl list | grep smartfileorganizer
 ```
 
 ### Windows (Startup Shortcut / Task Scheduler)
 
-Add a shortcut to `smart-organizer.cmd` in your Windows Startup folder:
+**Option A — Startup folder shortcut (simplest):**
+
+1. Open the Startup folder:
 
 ```
 Win + R → shell:startup
+```
+
+2. Create the shortcut directly into that folder from PowerShell — no manual right-click needed:
+
+```powershell
+$startupPath = [Environment]::GetFolderPath('Startup')
+$shortcutPath = Join-Path $startupPath 'smart-organizer.lnk'
+$targetPath = "$env:LOCALAPPDATA\SmartFileOrganizer\bin\smart-organizer.cmd"
+
+$shell = New-Object -ComObject WScript.Shell
+$shortcut = $shell.CreateShortcut($shortcutPath)
+$shortcut.TargetPath = $targetPath
+$shortcut.WorkingDirectory = Split-Path $targetPath
+$shortcut.Save()
+```
+
+3. Confirm it saved correctly:
+
+```powershell
+Test-Path (Join-Path ([Environment]::GetFolderPath('Startup')) 'smart-organizer.lnk')
+```
+
+**Option B — Task Scheduler (runs even if you don't log in interactively):**
+
+```powershell
+$action = New-ScheduledTaskAction -Execute "$env:LOCALAPPDATA\SmartFileOrganizer\bin\smart-organizer.cmd"
+$trigger = New-ScheduledTaskTrigger -AtLogOn
+Register-ScheduledTask -TaskName "SmartFileOrganizer" -Action $action -Trigger $trigger -Description "Runs Smart File Organizer at logon"
+```
+
+Verify the task was registered:
+
+```powershell
+Get-ScheduledTask -TaskName "SmartFileOrganizer"
 ```
 
 ---
