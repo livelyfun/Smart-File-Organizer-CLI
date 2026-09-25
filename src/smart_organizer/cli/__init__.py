@@ -1,6 +1,9 @@
 """Command-line interface for Smart File Organizer.
 
 Handles arguments, displays status messages, and manages process execution.
+
+The CLI is a frontend: it owns no filesystem logic and talks to the
+application service layer, rendering whatever the event bus reports.
 """
 
 from __future__ import annotations
@@ -9,12 +12,21 @@ import argparse
 import signal
 import sys
 import threading
+from datetime import datetime
 from typing import Optional, Sequence
 
 from smart_organizer import __version__
+from smart_organizer.application import EventBus, OrganizerService
+from smart_organizer.application.services.events import (
+    FileErrorEvent,
+    FileOrganizedEvent,
+    FileSkippedEvent,
+    InfoEvent,
+    MonitoringStoppedEvent,
+    OrganizerEvent,
+)
 from smart_organizer.core.config import AppConfig, get_default_config_path, load_config
 from smart_organizer.core.logger import setup_logger
-from smart_organizer.core.organizer import SmartFileOrganizer
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -62,6 +74,30 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _timestamp() -> str:
+    """Returns the current wall-clock time in the console status format."""
+    return datetime.now().strftime("%H:%M:%S")
+
+
+def print_event(event: OrganizerEvent) -> None:
+    """Renders a domain event as a console status line.
+
+    Monitoring lifecycle events are intentionally ignored: the CLI prints
+    its own banner and shutdown notices so each appears exactly once.
+    """
+    if isinstance(event, FileOrganizedEvent):
+        print(f"[{_timestamp()}] {event.filename} \u2192 {event.category}")
+    elif isinstance(event, FileSkippedEvent):
+        print(f"[{_timestamp()}] {event.filename} \u2192 SKIPPED ({event.reason})")
+    elif isinstance(event, FileErrorEvent):
+        print(
+            f"[{_timestamp()}] {event.filename} \u2192 ERROR: {event.error_message}",
+            file=sys.stderr,
+        )
+    elif isinstance(event, InfoEvent):
+        print(f"[{_timestamp()}] {event.message}")
+
+
 def display_status(config: AppConfig, custom_config_path: Optional[str] = None) -> None:
     """Displays detailed configuration and directory accessibility status."""
     watch_dir = config.resolved_watch_directory
@@ -79,7 +115,6 @@ def display_status(config: AppConfig, custom_config_path: Optional[str] = None) 
     else:
         dir_status = "Missing (Directory does not exist)"
 
-    cfg_file = config.resolved_log_file  # used for log check
     config_source = custom_config_path if custom_config_path else str(get_default_config_path())
 
     print(f"\nSmart File Organizer v{__version__} - Configuration & Directory Status\n")
@@ -100,6 +135,22 @@ def display_status(config: AppConfig, custom_config_path: Optional[str] = None) 
         for cat, exts in config.custom_categories.items():
             print(f"    {cat:<18}: {', '.join(exts)}")
     print()
+
+
+def _build_service(config: AppConfig) -> OrganizerService:
+    """Composes the service with a file logger and a console event renderer.
+
+    The file logger is quiet because every visible line is produced by the
+    event subscriber; without this each outcome would be printed twice.
+    """
+    bus = EventBus()
+    service = OrganizerService(
+        config,
+        bus=bus,
+        logger=setup_logger(config.resolved_log_file, quiet=True),
+    )
+    service.subscribe(print_event)
+    return service
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
@@ -133,14 +184,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         )
         return 1
 
-    logger = setup_logger(config.resolved_log_file)
-    organizer = SmartFileOrganizer(config, logger=logger)
+    service = _build_service(config)
 
     if args.organize_existing:
         print(f"\nScanning existing files in:")
         print(f"  {watch_dir}\n")
 
-        stats = organizer.organize_existing_files()
+        stats = service.organize_existing()
 
         print(
             f"\nOrganization complete: {stats['organized']} organized, "
@@ -157,27 +207,39 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     print("Waiting for new files...")
     print("Press Ctrl+C to stop.\n")
 
-    stop_event = threading.Event()
+    shutdown = threading.Event()
+    interrupted = threading.Event()
 
     def handle_signal(signum, frame):
-        stop_event.set()
+        interrupted.set()
+        shutdown.set()
 
     signal.signal(signal.SIGINT, handle_signal)
     signal.signal(signal.SIGTERM, handle_signal)
 
+    def wake_on_unexpected_stop(event: OrganizerEvent) -> None:
+        if isinstance(event, MonitoringStoppedEvent):
+            shutdown.set()
+
+    service.subscribe(wake_on_unexpected_stop)
+
     try:
-        organizer.start_monitoring(stop_event=stop_event)
+        service.start()
     except Exception as exc:
         print(f"\nWatcher Error: {exc}", file=sys.stderr)
         return 1
-    finally:
-        if stop_event.is_set():
-            print("\nStopping Smart File Organizer...")
-            print("Stopped cleanly.")
 
-    return 0
+    while not shutdown.wait(0.5):
+        pass
+
+    if interrupted.is_set():
+        print("\nStopping Smart File Organizer...")
+
+    was_running = service.stop()
+    print("Stopped cleanly.")
+
+    return 0 if interrupted.is_set() or was_running else 1
 
 
 if __name__ == "__main__":
     sys.exit(main())
-
