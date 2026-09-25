@@ -50,11 +50,13 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           INPUT_RUN_ID: ${{ inputs.run_id }}
           INPUT_VERSION: ${{ inputs.version }}
-          # What started the Build. GitHub exports the triggering run's id and
-          # commit as GITHUB_WORKFLOW_RUN_ID and GITHUB_WORKFLOW_RUN_HEAD_SHA,
-          # but the kind of event that started it is only in the payload, so it
-          # is passed in here. An empty value on workflow_dispatch is expected
-          # and is never read, because that branch is not taken.
+          # The triggering run, read from the event payload. GitHub's
+          # GITHUB_WORKFLOW_REF and GITHUB_WORKFLOW_SHA describe this
+          # workflow's own file, not the run that fired the event, so the
+          # triggering run's id, commit and originating event all come from
+          # here. Nothing named GITHUB_WORKFLOW_RUN_* exists.
+          SOURCE_RUN_ID: ${{ github.event.workflow_run.id }}
+          SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
           SOURCE_EVENT: ${{ github.event.workflow_run.event }}
         run: |
           set -euo pipefail
@@ -68,8 +70,8 @@ jobs:
               echo "skip=true" >> "${GITHUB_OUTPUT}"
               exit 0
             fi
-            run_id="${GITHUB_WORKFLOW_RUN_ID}"
-            ref="${GITHUB_WORKFLOW_RUN_HEAD_SHA}"
+            run_id="${SOURCE_RUN_ID}"
+            ref="${SOURCE_SHA}"
           else
             run_id="${INPUT_RUN_ID}"
             if [ -z "${run_id}" ]; then

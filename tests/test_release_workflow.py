@@ -125,23 +125,27 @@ def test_a_pull_request_build_cannot_reach_the_write_steps(release):
     assert "git tag --points-at" in resolve, "the tag must come from the repository, not the payload"
 
 
-def test_the_triggering_event_kind_is_passed_in_from_the_payload(release):
-    """GitHub does not export the triggering event as an environment variable.
+def test_the_triggering_run_is_passed_in_from_the_payload(release):
+    """GitHub does not export the triggering run as environment variables.
 
-    GITHUB_WORKFLOW_RUN_ID and GITHUB_WORKFLOW_RUN_HEAD_SHA exist, but the
-    event that started the run is only in the payload. Reading
-    GITHUB_EVENT_WORKFLOW_RUN_EVENT fails the step under `set -u` with
-    "unbound variable", which is how the first live run of this workflow
-    ended. The name has to be given to the step explicitly, and a structural
-    check cannot tell an invented variable from a real one, so the mapping
-    from the payload is what is asserted.
+    The run that fired a workflow_run event is described by
+    GITHUB_WORKFLOW_REF and GITHUB_WORKFLOW_SHA, which point at this
+    workflow's own file rather than the triggering run. Its id, commit and
+    originating event exist only in the payload, so all three have to be
+    mapped into the step. Reading an invented name fails under `set -u` with
+    "unbound variable", which is how the first two live runs of this workflow
+    ended.
     """
     step = _step(release, "release", "Resolve the build and version to release")
 
-    assert "GITHUB_EVENT_WORKFLOW_RUN_EVENT" not in step["run"]
-    assert step["env"]["SOURCE_EVENT"] == "${{ github.event.workflow_run.event }}", (
-        "the triggering event kind must be passed into the step from the payload"
-    )
+    for invented in ("GITHUB_EVENT_WORKFLOW_RUN_EVENT", "GITHUB_WORKFLOW_RUN_ID", "GITHUB_WORKFLOW_RUN_HEAD_SHA"):
+        assert invented not in step["run"], f"{invented} does not exist in a runner"
+
+    environment = step["env"]
+    assert environment["SOURCE_EVENT"] == "${{ github.event.workflow_run.event }}"
+    assert environment["SOURCE_RUN_ID"] == "${{ github.event.workflow_run.id }}"
+    assert environment["SOURCE_SHA"] == "${{ github.event.workflow_run.head_sha }}"
+
 
 
 def test_release_holds_only_the_permissions_it_needs(release):
@@ -381,3 +385,140 @@ def test_release_does_not_rebuild(release):
     ]
 
     assert not any(re.search(r"packaging/build\.py|pyinstaller", body) for body in bodies)
+
+
+# The environment variables GitHub documents. A name that looks like one of
+# these is not automatically one: GITHUB_WORKFLOW_RUN_ID and
+# GITHUB_EVENT_WORKFLOW_RUN_EVENT both read as though they existed, and both
+# were invented before a live run failed on them.
+GITHUB_ENVIRONMENT = {
+    "CI",
+    "GITHUB_ACTION",
+    "GITHUB_ACTIONS",
+    "GITHUB_ACTOR",
+    "GITHUB_API_URL",
+    "GITHUB_BASE_REF",
+    "GITHUB_ENV",
+    "GITHUB_EVENT_NAME",
+    "GITHUB_EVENT_PATH",
+    "GITHUB_GRAPHQL_URL",
+    "GITHUB_HEAD_REF",
+    "GITHUB_JOB",
+    "GITHUB_OUTPUT",
+    "GITHUB_PATH",
+    "GITHUB_REF",
+    "GITHUB_REF_NAME",
+    "GITHUB_REF_TYPE",
+    "GITHUB_REPOSITORY",
+    "GITHUB_REPOSITORY_ID",
+    "GITHUB_REPOSITORY_OWNER",
+    "GITHUB_RETENTION_DAYS",
+    "GITHUB_RUN_ATTEMPT",
+    "GITHUB_RUN_ID",
+    "GITHUB_RUN_NUMBER",
+    "GITHUB_SERVER_URL",
+    "GITHUB_SHA",
+    "GITHUB_STEP_SUMMARY",
+    "GITHUB_TRIGGERING_ACTOR",
+    "GITHUB_WORKFLOW",
+    "GITHUB_WORKFLOW_REF",
+    "GITHUB_WORKFLOW_SHA",
+    "GITHUB_WORKSPACE",
+    "RUNNER_ARCH",
+    "RUNNER_NAME",
+    "RUNNER_OS",
+    "RUNNER_TEMP",
+    "RUNNER_TOOL_CACHE",
+}
+
+
+def _code(script):
+    """The script without its comments, which cannot read anything."""
+    return "\n".join(line for line in script.splitlines() if not line.lstrip().startswith("#"))
+
+
+def _variables_read_by(script):
+    """Every name the script expands."""
+    body = _code(script)
+    braced = set(re.findall(r"\$\{([A-Za-z_][A-Za-z0-9_]*)", body))
+    bare = set(re.findall(r"\$([A-Za-z_][A-Za-z0-9_]*)", body))
+    return braced | bare
+
+
+def _variables_assigned_by(script):
+    """Every name the script sets itself, which needs no environment."""
+    body = _code(script)
+    assigned = set(
+        re.findall(r"^\s*(?:local\s+|export\s+)?([A-Za-z_][A-Za-z0-9_]*)=", body, re.M)
+    )
+    loops = set(re.findall(r"^\s*for\s+([A-Za-z_][A-Za-z0-9_]*)\s+in\b", body, re.M))
+    return assigned | loops
+
+
+def _nested_programs(script):
+    """Shell programs the step hands to a nested `bash -c`.
+
+    A name expanded inside one of those is the nested shell's variable, not the
+    step's, so it is checked against whatever that program sources.
+    """
+    return re.findall(r"bash -c '(.*?)'", _code(script), re.S)
+
+
+def _sourced_paths(script):
+    """The files the step sources, and so can read variables from."""
+    # Stops at whitespace or a command separator, so "source a.sh; next" does
+    # not yield the path "a.sh;".
+    return re.findall(r"^\s*source\s+([^\s;]+)", _code(script), re.M)
+
+
+@pytest.mark.parametrize("workflow_name", ["release", "build"])
+def test_every_variable_a_step_reads_is_one_it_can_actually_have(workflow_name):
+    """A step may not read a variable that nothing provides.
+
+    A structural test cannot tell an invented GITHUB_ name from a real one,
+    which is how two made-up names reached a live run. What can be checked is
+    arithmetic: each expanded name must be defined by the step's own env,
+    assigned by the step, or documented by GitHub. Anything else fails the
+    step under `set -u`.
+    """
+    workflow = _load(ROOT / ".github" / "workflows" / f"{workflow_name}.yml")
+    unreadable = []
+
+    for job_name, job in workflow["jobs"].items():
+        for step in job["steps"]:
+            script = step.get("run")
+            if not script:
+                continue
+            available = (
+                set(step.get("env", {})) | _variables_assigned_by(script) | GITHUB_ENVIRONMENT
+            )
+            # Nested payloads are blanked out first: a name inside a quoted
+            # `bash -c` program is the nested shell's, not the step's.
+            own = re.sub(r"bash -c '[^']*'", "", script, flags=re.S)
+            for name in _variables_read_by(own):
+                if name not in available:
+                    unreadable.append(
+                        f"{workflow_name}.yml {job_name} / {step.get('name')}: ${{{name}}}"
+                    )
+
+            # A nested `bash -c` has its own variables, provided by whatever it
+            # sources, and only the names that program itself expands need
+            # resolving. The rest of the sourced file is that script's business.
+            for program in _nested_programs(script):
+                sourced = ""
+                for path in _sourced_paths(program):
+                    candidate = ROOT / path
+                    if candidate.is_file():
+                        sourced += candidate.read_text(encoding="utf-8")
+                provided = available | _variables_assigned_by(sourced)
+                for name in _variables_read_by(program):
+                    if name not in provided:
+                        unreadable.append(
+                            f"{workflow_name}.yml {job_name} / {step.get('name')}: "
+                            f"nested ${{{name}}}"
+                        )
+
+    assert not unreadable, (
+        "these are read but never provided, so the step fails under set -u: "
+        + "; ".join(unreadable)
+    )
