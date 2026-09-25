@@ -8,6 +8,11 @@ desktop GUI are clients of this package and nothing below it.
 from smart_organizer.application.services.application_service import OrganizerService
 from smart_organizer.application.services.event_bus import EventBus, EventCallback
 from smart_organizer.application.services.event_logger import EventEmitterLogger
+from smart_organizer.application.services.update_service import (
+    UpdateCheckError,
+    UpdateStatus,
+    check_for_update,
+)
 from smart_organizer.application.services.events import (
     BatchCompleteEvent,
     FileErrorEvent,
@@ -32,4 +37,7 @@ __all__ = [
     "MonitoringStoppedEvent",
     "OrganizerEvent",
     "OrganizerService",
+    "UpdateCheckError",
+    "UpdateStatus",
+    "check_for_update",
 ]

@@ -17,6 +17,9 @@ from smart_organizer.application.services import (
     MonitoringStoppedEvent,
     OrganizerEvent,
     OrganizerService,
+    UpdateCheckError,
+    UpdateStatus,
+    check_for_update,
 )
 
 __all__ = [
@@ -32,4 +35,7 @@ __all__ = [
     "MonitoringStoppedEvent",
     "OrganizerEvent",
     "OrganizerService",
+    "UpdateCheckError",
+    "UpdateStatus",
+    "check_for_update",
 ]
