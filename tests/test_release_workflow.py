@@ -349,11 +349,15 @@ def test_release_does_not_rebuild(release):
     """No packaging step may appear in the release workflow.
 
     Building here would mean releasing binaries that never passed the Build
-    workflow's smoke test and checksum checks.
+    workflow's smoke test and checksum checks. Comments are ignored: naming
+    the build script to say it is deliberately not called is not calling it.
     """
-    runs = [
-        step.get("run", "")
+    bodies = [
+        "\n".join(
+            line for line in step.get("run", "").splitlines()
+            if not line.lstrip().startswith("#")
+        )
         for step in release["jobs"]["release"]["steps"]
     ]
 
-    assert not any(re.search(r"packaging/build\.py|pyinstaller", run) for run in runs)
+    assert not any(re.search(r"packaging/build\.py|pyinstaller", body) for body in bodies)
