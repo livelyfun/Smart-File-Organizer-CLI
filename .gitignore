@@ -18,7 +18,6 @@ dist/
 # Frozen build working directories
 .build-venv/
 packaging/pyinstaller/_version_info.txt
-packaging/pyinstaller/_build_warnings.txt
 packaging/output/
 
 # Test / coverage
