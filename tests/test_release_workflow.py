@@ -174,6 +174,24 @@ def test_pages_failure_does_not_hide_a_published_release(release):
     assert release["jobs"]["pages"]["continue-on-error"] is True
 
 
+def test_the_manifest_is_only_deployed_after_a_release_was_published(release):
+    """A push that released nothing must not attempt a deployment.
+
+    Every step of the release job is skipped when there is no version tag, and
+    a job whose steps were all skipped still reports success, so the Pages job
+    cannot tell the difference on its own. Left ungated it runs on every push
+    and fails looking for a manifest that was never written, which is noise
+    that would hide a real deployment failure.
+    """
+    output = release["jobs"]["release"]["outputs"]["published"]
+
+    assert "steps.target.outputs.skip" in output, (
+        "the published output has to account for the skip that a tagless push takes"
+    )
+    assert "inputs.dry_run" in output, "a dry run publishes nothing, so it deploys nothing"
+    assert release["jobs"]["pages"]["if"] == "needs.release.outputs.published == 'true'"
+
+
 def test_release_takes_the_artifacts_the_build_uploaded(release, build):
     """The download pattern and the upload name have to meet.
 

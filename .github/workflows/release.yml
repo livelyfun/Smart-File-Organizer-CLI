@@ -34,6 +34,12 @@ jobs:
   release:
     name: Publish the release
     runs-on: ubuntu-latest
+    outputs:
+      # Whether this run actually published something. A step output is not
+      # visible to another job, and a job whose steps were all skipped still
+      # reports success, so without this the Pages job would try to deploy a
+      # manifest that was never generated, on every push.
+      published: ${{ steps.target.outputs.skip != 'true' && !(github.event_name == 'workflow_dispatch' && inputs.dry_run) }}
     permissions:
       # Creating and replacing the release.
       contents: write
@@ -248,9 +254,7 @@ jobs:
   pages:
     name: Deploy the update manifest
     needs: release
-    if: >-
-      needs.release.result == 'success' &&
-      !(github.event_name == 'workflow_dispatch' && inputs.dry_run)
+    if: needs.release.outputs.published == 'true'
     runs-on: ubuntu-latest
     permissions:
       pages: write
