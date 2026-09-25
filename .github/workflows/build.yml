@@ -40,11 +40,18 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install ".[build]"
 
+      # Only the Windows installer needs an external tool. It is installed
+      # before the build so a missing compiler is reported as a setup
+      # failure rather than surfacing as a confusing build error.
+      - name: Install Inno Setup
+        if: runner.os == 'Windows'
+        run: choco install innosetup --yes --no-progress
+
       # --clean matters: a bundle that inherits a file from an earlier run
       # is not reproducible, and the tree checksum below is only meaningful
       # if the output directory started empty.
       - name: Build standalone executable
-        run: python packaging/build.py --clean
+        run: python packaging/build.py --clean --installer
 
       # The behavioural gate. A bundle that starts but cannot watch is the
       # failure this application is most likely to ship, so it is checked
@@ -62,6 +69,11 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: smart-organizer-${{ matrix.os }}
-          path: packaging/output/smart-organizer
+          path: |
+            packaging/output/smart-organizer
+            packaging/output/*.exe
+            packaging/output/*.dmg
+            packaging/output/*.tar.xz
+            packaging/output/*.sha256
           if-no-files-found: error
           retention-days: 7

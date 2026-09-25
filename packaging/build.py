@@ -27,6 +27,7 @@ import subprocess
 import sys
 import venv
 from pathlib import Path
+from typing import Optional
 
 ROOT = Path(__file__).resolve().parent.parent
 PACKAGING_DIR = ROOT / "packaging"
@@ -38,6 +39,102 @@ WORK_DIR = ROOT / "build"
 # Install the package plus the build extra into the throwaway venv. The
 # version is read from the package itself, so nothing is duplicated here.
 BUILD_REQUIREMENTS = ".[build]"
+
+# Text embedded in the generated installers. Kept here so the build is the
+# single place that decides what users are told at install time.
+_INSTALL_COMMAND = """#!/bin/sh
+# Installs {app_name} into /usr/local/bin.
+set -e
+
+SOURCE="$(cd "$(dirname "$0")" && pwd)/{app_name}/{app_name}"
+TARGET="/usr/local/bin/{app_name}"
+
+if [ ! -f "$SOURCE" ]; then
+    echo "error: cannot find $SOURCE" >&2
+    exit 1
+fi
+
+if [ -w /usr/local/bin ]; then
+    INSTALL_DIR=/usr/local/bin
+else
+    echo "note: /usr/local/bin needs elevated rights, using sudo."
+    INSTALL_DIR=/usr/local/bin
+fi
+
+echo "Installing {app_name} to $INSTALL_DIR ..."
+if [ -w "$INSTALL_DIR" ]; then
+    cp -R "$SOURCE" "$INSTALL_DIR/{app_name}"
+else
+    sudo cp -R "$SOURCE" "$INSTALL_DIR/{app_name}"
+fi
+
+chmod +x "$TARGET"
+echo "Installed. Try: {app_name} --version"
+"""
+
+_DMG_README = """Smart File Organizer {version}
+
+This is a standalone build: it does not need Python installed.
+
+To install, double-click install.command (or open a Terminal in this window
+and run ./install.command). It copies the executable into /usr/local/bin so
+you can run:
+
+    smart-organizer
+
+To run without installing, use the executable directly:
+
+    ./smart-organizer/{app_name} --help
+
+macOS may refuse to open this application because it is not notarised.
+This build is unsigned, so Gatekeeper will report that the developer
+cannot be verified. See docs/packaging.md in the project repository.
+"""
+
+_ARCHIVE_README = """# Smart File Organizer {version}
+
+Standalone build: no Python required.
+
+## Install
+
+    ./install.sh
+
+This copies the executable into /usr/local/bin, using sudo if that
+directory is not writable. Or move it anywhere yourself and add that
+directory to PATH.
+
+## Run
+
+    smart-organizer --help
+    smart-organizer --status
+
+## Uninstall
+
+    sudo rm /usr/local/bin/smart-organizer
+"""
+
+_LINUX_INSTALL_SH = """#!/bin/sh
+# Installs {app_name} into /usr/local/bin.
+set -e
+
+SOURCE="$(cd "$(dirname "$0")" && pwd)/{app_name}/{app_name}"
+INSTALL_DIR=/usr/local/bin
+
+if [ ! -f "$SOURCE" ]; then
+    echo "error: cannot find $SOURCE" >&2
+    exit 1
+fi
+
+if [ -w "$INSTALL_DIR" ]; then
+    cp -R "$SOURCE" "$INSTALL_DIR/{app_name}"
+else
+    echo "note: $INSTALL_DIR needs elevated rights, using sudo."
+    sudo cp -R "$SOURCE" "$INSTALL_DIR/{app_name}"
+fi
+
+chmod +x "$INSTALL_DIR/{app_name}"
+echo "Installed. Try: {app_name} --version"
+"""
 
 
 def _log(message: str) -> None:
@@ -232,6 +329,145 @@ def report(bundle: Path, executable: Path) -> None:
     _log("next: python packaging/smoke_test.py " + str(executable))
 
 
+def build_windows_installer(version: str) -> Optional[Path]:
+    """Compile the Inno Setup script into Setup.exe.
+
+    Requires the Inno Setup compiler. On Windows runners it is installed
+    with: choco install innosetup
+    """
+    if os.name != "nt":
+        return None
+
+    script = PACKAGING_DIR / "windows" / "smart-organizer.iss"
+    if not script.is_file():
+        _fail(f"Inno Setup script not found: {script}")
+
+    compiler = shutil.which("iscc") or _find_inno_compiler()
+    if not compiler:
+        _fail(
+            "Inno Setup compiler (iscc) was not found. Install it with "
+            "'choco install innosetup', or build without --installer."
+        )
+
+    _log(f"compiling Inno Setup script for version {version}")
+    subprocess.run(
+        [compiler, f"/DAppVersion={version}", str(script)],
+        cwd=script.parent,
+        check=True,
+    )
+
+    setup_exe = script.parent / ".." / "output" / f"SmartFileOrganizer-{version}-setup.exe"
+    setup_exe = setup_exe.resolve()
+    if not setup_exe.is_file():
+        _fail(f"Inno Setup reported success but {setup_exe} does not exist")
+    return setup_exe
+
+
+def _find_inno_compiler() -> str | None:
+    """Locate iscc in the default Inno Setup install locations."""
+    candidates = [
+        Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "Inno Setup 6" / "ISCC.exe",
+        Path(os.environ.get("ProgramW6432", r"C:\Program Files")) / "Inno Setup 6" / "ISCC.exe",
+        Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"))
+        / "Inno Setup 6"
+        / "ISCC.exe",
+    ]
+    for candidate in candidates:
+        if candidate.is_file():
+            return str(candidate)
+    return None
+
+
+def build_macos_dmg(bundle: Path, version: str) -> Optional[Path]:
+    """Wrap the bundle in a DMG containing a guided installer.
+
+    A plain command line tool does not need an .app bundle, so this does not
+    create one. The volume instead ships the executable together with an
+    install.command that puts it on PATH, which is the part users actually
+    need. Unsigned: see docs/packaging.md for Gatekeeper.
+    """
+    if platform.system() != "Darwin":
+        return None
+
+    stage = DIST_DIR / "dmg-root" / "Smart File Organizer"
+    if stage.parent.exists():
+        shutil.rmtree(stage.parent)
+    stage.mkdir(parents=True)
+
+    shutil.copytree(bundle, stage / "smart-organizer", symlinks=True)
+    # PyInstaller marks the launcher executable; keep that through the copy.
+    launcher = stage / "smart-organizer" / "smart-organizer"
+    launcher.chmod(0o755)
+
+    (stage / "install.command").write_text(
+        _INSTALL_COMMAND.format(app_name="smart-organizer"),
+        encoding="utf-8",
+    )
+    (stage / "install.command").chmod(0o755)
+    (stage / "README.txt").write_text(_DMG_README.format(version=version), encoding="utf-8")
+
+    dmg = DIST_DIR / f"SmartFileOrganizer-{version}-macos.dmg"
+    if dmg.exists():
+        dmg.unlink()
+
+    _log(f"creating DMG: {dmg.name}")
+    subprocess.run(
+        [
+            "hdiutil", "create",
+            "-volname", "Smart File Organizer",
+            "-srcfolder", str(stage.parent),
+            "-ov", "-format", "UDZO",
+            str(dmg),
+        ],
+        check=True,
+    )
+    return dmg
+
+
+def build_linux_archive(bundle: Path, version: str) -> Optional[Path]:
+    """Package the bundle as a compressed archive with checksums.
+
+    A tarball rather than an AppImage on purpose. AppImage needs FUSE to
+    launch and awkward extraction otherwise, and it wants a desktop entry,
+    which a command line tool has no use for. An archive drops cleanly into
+    a PATH directory and is the more honest fit for a CLI.
+    """
+    if not platform.system().startswith("Linux"):
+        return None
+
+    release_dir = DIST_DIR / f"smart-organizer-{version}-linux-x86_64"
+    if release_dir.exists():
+        shutil.rmtree(release_dir)
+    release_dir.mkdir(parents=True)
+
+    shutil.copytree(bundle, release_dir / "smart-organizer", symlinks=True)
+    (release_dir / "LICENSE").write_text(
+        (ROOT / "LICENSE").read_text(encoding="utf-8") if (ROOT / "LICENSE").is_file() else "",
+        encoding="utf-8",
+    )
+    (release_dir / "README.md").write_text(_ARCHIVE_README.format(version=version), encoding="utf-8")
+    (release_dir / "install.sh").write_text(
+        _LINUX_INSTALL_SH.format(app_name="smart-organizer"), encoding="utf-8"
+    )
+    (release_dir / "install.sh").chmod(0o755)
+
+    archive_base = DIST_DIR / f"smart-organizer-{version}-linux-x86_64"
+    # Append rather than with_suffix(): the version contains dots, so
+    # with_suffix() would treat "-linux-x86_64" or ".0" as an extension.
+    archive = DIST_DIR / f"{archive_base.name}.tar.xz"
+    _log(f"creating archive: {archive.name}")
+    subprocess.run(
+        ["tar", "-cJf", str(archive), "-C", str(DIST_DIR), archive_base.name],
+        check=True,
+    )
+
+    digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+    (DIST_DIR / f"{archive.name}.sha256").write_text(
+        f"{digest}  {archive.name}\n", encoding="utf-8"
+    )
+    return archive
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument(
@@ -248,6 +484,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--smoke-test",
         action="store_true",
         help="run the frozen-binary smoke test after building",
+    )
+    parser.add_argument(
+        "--installer",
+        action="store_true",
+        help="also build the native installer (Setup.exe, DMG, or Linux archive)",
     )
     return parser.parse_args(argv)
 
@@ -270,13 +511,23 @@ def main(argv: list[str] | None = None) -> int:
     if args.smoke_test:
         _log("running smoke test against the frozen binary")
         smoke = PACKAGING_DIR / "smoke_test.py"
-        # Run through the build venv python so pytest (if the smoke test
-        # needs it) resolves consistently, but execute the artifact itself.
         result = subprocess.run([str(python), str(smoke), str(executable)], cwd=ROOT)
         if result.returncode != 0:
             _log("smoke test FAILED")
             return result.returncode
         _log("smoke test passed")
+
+    if args.installer:
+        built: list[Path] = []
+        if os.name == "nt":
+            built.append(build_windows_installer(version))
+        elif platform.system() == "Darwin":
+            built.append(build_macos_dmg(bundle, version))
+        elif platform.system().startswith("Linux"):
+            built.append(build_linux_archive(bundle, version))
+        for artifact in built:
+            if artifact:
+                _log(f"installer: {artifact}")
 
     return 0
 
