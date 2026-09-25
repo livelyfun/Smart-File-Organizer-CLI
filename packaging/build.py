@@ -47,6 +47,28 @@ APP_NAME = "smart-organizer"
 # tens of megabytes, and the build should not have to hold one in memory.
 CHECKSUM_CHUNK_BYTES = 1024 * 1024
 
+# Directory the macOS DMG places at the root of its volume. scripts/install.sh
+# has to find the executable inside the mounted image, so the two files must
+# agree on this; tests/test_packaging_layout.py checks that they do.
+DMG_VOLUME_NAME = "Smart File Organizer"
+
+
+def asset_filename(installer: str, version: str) -> str:
+    """Return the release asset name this build produces for a platform.
+
+    The install scripts download these names from the release, so they are
+    the one place where build and installer have to agree. Naming them here
+    rather than inline in each builder keeps that agreement checkable.
+    """
+    if installer == "windows":
+        return f"SmartFileOrganizer-{version}-setup.exe"
+    if installer == "macos":
+        return f"SmartFileOrganizer-{version}-macos.dmg"
+    if installer == "linux":
+        return f"{APP_NAME}-{version}-linux-x86_64.tar.xz"
+    _fail(f"unknown platform for a release asset: {installer}")
+
+
 # Text embedded in the generated installers. Kept here so the build is the
 # single place that decides what users are told at install time.
 _INSTALL_COMMAND = """#!/bin/sh
@@ -394,7 +416,7 @@ def build_windows_installer(version: str) -> Optional[Path]:
         check=True,
     )
 
-    setup_exe = script.parent / ".." / "output" / f"SmartFileOrganizer-{version}-setup.exe"
+    setup_exe = script.parent / ".." / "output" / asset_filename("windows", version)
     setup_exe = setup_exe.resolve()
     if not setup_exe.is_file():
         _fail(f"Inno Setup reported success but {setup_exe} does not exist")
@@ -435,11 +457,15 @@ def build_macos_dmg(bundle: Path, version: str) -> Optional[Path]:
     create one. The volume instead ships the executable together with an
     install.command that puts it on PATH, which is the part users actually
     need. Unsigned: see docs/packaging.md for Gatekeeper.
+
+    The whole staged directory is mounted at the volume root, so the
+    executable ends up at <volume>/<DMG_VOLUME_NAME>/<app name> rather than in
+    the root itself. That is the path scripts/install.sh copies from.
     """
     if platform.system() != "Darwin":
         return None
 
-    stage = DIST_DIR / "dmg-root" / "Smart File Organizer"
+    stage = DIST_DIR / "dmg-root" / DMG_VOLUME_NAME
     if stage.parent.exists():
         shutil.rmtree(stage.parent)
     stage.mkdir(parents=True)
@@ -458,7 +484,7 @@ def build_macos_dmg(bundle: Path, version: str) -> Optional[Path]:
         _DMG_README.format(version=version, app_name=APP_NAME), encoding="utf-8"
     )
 
-    dmg = DIST_DIR / f"SmartFileOrganizer-{version}-macos.dmg"
+    dmg = DIST_DIR / asset_filename("macos", version)
     if dmg.exists():
         dmg.unlink()
 
@@ -466,7 +492,7 @@ def build_macos_dmg(bundle: Path, version: str) -> Optional[Path]:
     subprocess.run(
         [
             "hdiutil", "create",
-            "-volname", "Smart File Organizer",
+            "-volname", DMG_VOLUME_NAME,
             "-srcfolder", str(stage.parent),
             "-ov", "-format", "UDZO",
             str(dmg),
@@ -489,12 +515,16 @@ def build_linux_archive(bundle: Path, version: str) -> Optional[Path]:
     if not platform.system().startswith("Linux"):
         return None
 
-    release_dir = DIST_DIR / f"smart-organizer-{version}-linux-x86_64"
+    archive = DIST_DIR / asset_filename("linux", version)
+    # The tar member is the staging directory, so it is the asset name
+    # without the archive suffix rather than a separately spelled name.
+    release_name = archive.name[: -len(".tar.xz")]
+    release_dir = DIST_DIR / release_name
     if release_dir.exists():
         shutil.rmtree(release_dir)
     release_dir.mkdir(parents=True)
 
-    shutil.copytree(bundle, release_dir / "smart-organizer", symlinks=True)
+    shutil.copytree(bundle, release_dir / APP_NAME, symlinks=True)
     (release_dir / "LICENSE").write_text(
         (ROOT / "LICENSE").read_text(encoding="utf-8") if (ROOT / "LICENSE").is_file() else "",
         encoding="utf-8",
@@ -505,13 +535,9 @@ def build_linux_archive(bundle: Path, version: str) -> Optional[Path]:
     )
     (release_dir / "install.sh").chmod(0o755)
 
-    archive_base = DIST_DIR / f"smart-organizer-{version}-linux-x86_64"
-    # Append rather than with_suffix(): the version contains dots, so
-    # with_suffix() would treat "-linux-x86_64" or ".0" as an extension.
-    archive = DIST_DIR / f"{archive_base.name}.tar.xz"
     _log(f"creating archive: {archive.name}")
     subprocess.run(
-        ["tar", "-cJf", str(archive), "-C", str(DIST_DIR), archive_base.name],
+        ["tar", "-cJf", str(archive), "-C", str(DIST_DIR), release_name],
         check=True,
     )
     return archive

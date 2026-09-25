@@ -76,6 +76,36 @@ jobs:
             echo "ok: $(basename "${artifact}")"
           done
 
+      # The DMG's internal layout is a contract with scripts/install.sh, and
+      # no other check covers it: the bundle inside the image can be perfect
+      # while the path the installer copies from is not, and that failure only
+      # shows up on a user's Mac. Mounting the image here is the one place it
+      # can be caught on a build, and running the executable out of it proves
+      # the whole path rather than just the directory names.
+      - name: Verify DMG layout
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          dmg=$(ls packaging/output/*.dmg)
+          # The same parse as scripts/install.sh's parse_mount_point, whose
+          # path this step exists to verify: hdiutil pads its columns with
+          # whitespace rather than a dependable tab.
+          mount_point=$(hdiutil attach "$dmg" -nobrowse -readonly -mountrandom \
+            | grep -o '/Volumes/.*' | head -1 | sed -e 's/[[:space:]]*$//' || true)
+          if [ -z "$mount_point" ]; then
+            echo "error: hdiutil reported no mount point" >&2
+            exit 1
+          fi
+          trap 'hdiutil detach "$mount_point" -quiet || true' EXIT
+          bundle="$mount_point/Smart File Organizer/smart-organizer/smart-organizer"
+          if [ ! -d "$mount_point/Smart File Organizer/smart-organizer" ]; then
+            echo "error: $dmg does not contain Smart File Organizer/smart-organizer" >&2
+            ls -la "$mount_point" >&2
+            exit 1
+          fi
+          "$bundle" --version
+
       # The behavioural gate. A bundle that starts but cannot watch is the
       # failure this application is most likely to ship, so it is checked
       # explicitly rather than inferred from a successful build.
