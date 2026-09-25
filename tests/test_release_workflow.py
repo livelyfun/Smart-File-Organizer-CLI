@@ -12,6 +12,7 @@ that the Build uploads what the release needs to find.
 """
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -69,8 +70,12 @@ def bash():
 
 
 def _run(bash, script, env=None, cwd=None):
-    """Run a workflow step's shell body, as the runner would."""
-    environment = {"PATH": "/usr/bin:/bin:/usr/local/bin"}
+    """Run a workflow step's shell body, as the runner would.
+
+    The caller's environment is inherited, because a runner's PATH is what
+    makes `python` resolvable and that path is set up outside the step.
+    """
+    environment = dict(os.environ)
     environment.update(env or {})
     return subprocess.run(
         [bash, "-c", script],

@@ -110,6 +110,20 @@ printf '/dev/disk4s1        Apple_HFS                       /Volumes/%s\\n' \\
 MOUNT_POINT = "/Volumes/Smart File Organizer"
 
 
+def _as_bash_path(path):
+    """Render a path the way the bash under test will read it.
+
+    A Windows path such as C:\\Users\\... contains the colon that separates
+    PATH entries, so it has to be converted before a Windows runner's bash can
+    use it in PATH. Git Bash provides cygpath for exactly this.
+    """
+    if os.name != "nt":
+        return str(path)
+    return subprocess.run(
+        ["cygpath", "-u", str(path)], capture_output=True, text=True, check=True
+    ).stdout.strip()
+
+
 def _attach_with_fake_hdiutil(bash, tmp_path, fails=False):
     """Run attach_dmg from install.sh against a fake hdiutil on PATH."""
     tools = tmp_path / "bin"
@@ -126,13 +140,13 @@ def _attach_with_fake_hdiutil(bash, tmp_path, fails=False):
             'set -euo pipefail; source "$1"; attach_dmg "$2"',
             "sh",
             str(INSTALL_SH),
-            str(tmp_path / "image.dmg"),
+            _as_bash_path(tmp_path / "image.dmg"),
         ],
         env={
             # The installer reads HOME while being sourced, and the fake
             # directory comes first so the real hdiutil cannot be reached.
             **os.environ,
-            "PATH": f"{tools}:/usr/bin:/bin",
+            "PATH": f"{_as_bash_path(tools)}{os.pathsep}{os.environ.get('PATH', '')}",
             "FAKE_HDIOUTIL_VOLUME": MOUNT_POINT.rsplit("/", 1)[1],
             "FAKE_HDIOUTIL_FAILS": "1" if fails else "0",
         },
