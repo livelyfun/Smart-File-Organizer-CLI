@@ -210,13 +210,15 @@ def _popen_kwargs() -> dict:
 def _send_shutdown_request(process: subprocess.Popen) -> None:
     """Ask watch mode to stop the way a user would.
 
-    The application handles SIGINT and SIGTERM. On Windows, CTRL_C_EVENT
-    is what the runtime maps onto SIGINT; CTRL_BREAK_EVENT would arrive as
-    SIGBREAK, which the application does not handle, so the process would
-    be killed outright and the clean-shutdown check would be meaningless.
+    The application handles SIGINT, SIGTERM and (on Windows) SIGBREAK.
+    Windows has no POSIX signals: a console control event is the only
+    equivalent, and it has to be sent to a process group. Note that
+    CREATE_NEW_PROCESS_GROUP disables CTRL_C_EVENT for the new group, so
+    CTRL_BREAK_EVENT is the event that actually gets delivered - and the
+    application maps it to SIGBREAK and shuts down cleanly.
     """
     if os.name == "nt":
-        process.send_signal(signal.CTRL_C_EVENT)
+        process.send_signal(signal.CTRL_BREAK_EVENT)
     else:
         process.send_signal(signal.SIGINT)
 
@@ -348,13 +350,14 @@ def check_live_watch(harness: Harness) -> None:
 
         _log(f"live watch filed: {[p.name for p in harness.categorized()]}")
 
-        # Clean shutdown: SIGINT is how a user stops this, so it must work.
+        # Clean shutdown: the stop signal is how a user ends a run, so the
+        # watcher must stop without being killed.
         _terminate(process)
         if process.returncode != 0:
             raise SmokeFailure(
-                f"clean shutdown via SIGINT returned {process.returncode}, expected 0"
+                f"clean shutdown returned {process.returncode}, expected 0.\n{read_output()}"
             )
-        _log("clean shutdown via SIGINT returned 0")
+        _log("clean shutdown returned 0")
 
         # Checked last: it is a property of the backend, not of the shutdown.
         _check_backend_degradation(output_path)

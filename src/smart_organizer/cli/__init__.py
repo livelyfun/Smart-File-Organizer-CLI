@@ -153,6 +153,24 @@ def _build_service(config: AppConfig) -> OrganizerService:
     return service
 
 
+def install_shutdown_handlers(handler) -> tuple:
+    """Register the platform's stop signals, returning the ones handled.
+
+    SIGINT and SIGTERM cover POSIX. On Windows, Ctrl+Break arrives as
+    SIGBREAK, which neither of those covers; without a handler it would
+    kill the process mid-file-move rather than stop the watcher cleanly.
+    """
+    signals = [signal.SIGINT, signal.SIGTERM]
+    if hasattr(signal, "SIGBREAK"):
+        signals.append(signal.SIGBREAK)
+
+    registered = []
+    for stop_signal in signals:
+        signal.signal(stop_signal, handler)
+        registered.append(stop_signal)
+    return tuple(registered)
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     """Main CLI entrypoint function."""
     parser = build_parser()
@@ -214,8 +232,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         interrupted.set()
         shutdown.set()
 
-    signal.signal(signal.SIGINT, handle_signal)
-    signal.signal(signal.SIGTERM, handle_signal)
+    install_shutdown_handlers(handle_signal)
 
     def wake_on_unexpected_stop(event: OrganizerEvent) -> None:
         if isinstance(event, MonitoringStoppedEvent):
