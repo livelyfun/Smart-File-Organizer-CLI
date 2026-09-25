@@ -249,18 +249,21 @@ def test_tag_must_match_the_packaged_version(release, bash, tag, expected_exit):
     assert result.returncode == expected_exit, result.stdout + result.stderr
 
 
-def _stage_downloads(root, assets):
+def _stage_downloads(root, assets, bundle_executable="smart-organizer"):
     """Lay out a downloaded-artifact tree the way actions/download-artifact does.
 
     Each asset comes with its sidecar, which is what the Build uploads, so a
-    test has to remove one deliberately to exercise the failure.
+    test has to remove one deliberately to exercise the failure. The bundle is
+    given an executable of its own because that is what is really in there:
+    on Windows it is smart-organizer.exe, and a search that recurses picks it
+    up in place of the installer.
     """
     for index, name in enumerate(assets):
         platform = root / "downloaded" / f"smart-organizer-platform-{index}"
         # Every platform artifact also carries the raw bundle, which is not a
         # release asset and must not become one.
         (platform / "smart-organizer").mkdir(parents=True)
-        (platform / "smart-organizer" / "smart-organizer").write_text("binary")
+        (platform / "smart-organizer" / bundle_executable).write_text("binary")
         (platform / name).write_text("artifact")
         (platform / f"{name}.sha256").write_text("digest")
     return root
@@ -272,7 +275,10 @@ def test_release_assets_exclude_the_bundle_and_need_sidecars(release, bash, tmp_
 
     The onedir bundle is present in every Build artifact and is identical
     across platforms, so collecting it would attach three copies of the same
-    thing to the release.
+    thing to the release. Its executable is the sharp case: on Windows the
+    bundle holds smart-organizer.exe, so a search that recurses finds an .exe
+    and publishes the raw unsigned binary in place of the installer, which is
+    what happened on the first tagged release.
     """
     _stage_downloads(
         tmp_path,
@@ -281,6 +287,7 @@ def test_release_assets_exclude_the_bundle_and_need_sidecars(release, bash, tmp_
             f"SmartFileOrganizer-{VERSION}-macos.dmg",
             f"SmartFileOrganizer-{VERSION}-setup.exe",
         ],
+        bundle_executable="smart-organizer.exe",
     )
 
     script = _step(release, "release", "Collect the release assets")["run"]
@@ -302,6 +309,21 @@ def test_release_assets_exclude_the_bundle_and_need_sidecars(release, bash, tmp_
         f"smart-organizer-{VERSION}-linux-x86_64.tar.xz.sha256",
     ]
     assert not list((tmp_path / "release").rglob("smart-organizer"))
+
+
+def test_the_bundle_executable_is_not_collected_by_recursion(release):
+    """The asset search must be bounded, not a plain recursive find.
+
+    Recorded here as an explicit expectation because the shape it depends on
+    is invisible in the workflow: the artifact root is packaging/output, so
+    the installer sits beside the bundle directory rather than inside it.
+    """
+    script = _step(release, "release", "Collect the release assets")["run"]
+
+    assert re.search(r"find\s+downloaded\s+-mindepth\s+\d+\s+-maxdepth\s+\d+", script), (
+        "collecting artifacts by an unbounded find publishes the bundle's own "
+        "executable, which on Windows is a .exe that looks like an installer"
+    )
 
 
 @pytest.mark.skipif(shutil.which("bash") is None, reason="bash is needed to run the step")

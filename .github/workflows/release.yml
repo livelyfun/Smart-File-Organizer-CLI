@@ -175,6 +175,12 @@ jobs:
       # Each Build artifact also contains the raw onedir bundle, which is
       # identical on every platform and is not a release asset. Only the
       # installer files and their sidecars are collected.
+      #
+      # The search stops at the artifact's own files rather than recursing,
+      # because the bundle holds an executable of its own: on Windows
+      # packaging/output/smart-organizer/smart-organizer.exe is a .exe inside
+      # the artifact, and publishing it would offer users the raw unsigned
+      # binary in place of the installer.
       - name: Collect the release assets
         if: steps.target.outputs.skip != 'true'
         env:
@@ -183,7 +189,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p release manifest
-          find downloaded -type f \
+          find downloaded -mindepth 2 -maxdepth 2 -type f \
             \( -name '*.tar.xz' -o -name '*.dmg' -o -name '*.exe' -o -name '*.sha256' \) \
             -exec cp {} release/ \;
 
