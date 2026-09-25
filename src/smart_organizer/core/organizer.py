@@ -14,14 +14,18 @@ from typing import Any, Dict, Optional
 from smart_organizer.core.classifier import FileClassifier
 from smart_organizer.core.config import AppConfig
 from smart_organizer.core.file_manager import FileManager
-from smart_organizer.core.logger import OrganizerLogger, setup_logger
+from smart_organizer.core.logger import OrganizerLoggerProtocol, setup_logger
 from smart_organizer.core.watcher import DirectoryWatcher
 
 
 class SmartFileOrganizer:
     """Core coordinator for file organization operations."""
 
-    def __init__(self, config: AppConfig, logger: Optional[OrganizerLogger] = None):
+    def __init__(
+        self,
+        config: AppConfig,
+        logger: Optional[OrganizerLoggerProtocol] = None,
+    ):
         self.config = config
         self.logger = logger or setup_logger(self.config.resolved_log_file)
         self.classifier = FileClassifier(
@@ -107,7 +111,7 @@ class SmartFileOrganizer:
         """Scans the root watch directory and organizes existing files directly inside it.
 
         Does not recursively scan category directories.
-        Returns a dict with 'organized', 'skipped', 'failed', and 'errors' counts.
+        Returns a dict with 'organized', 'skipped', and 'failed' counts.
         """
         watch_dir = self.config.resolved_watch_directory
         if not watch_dir.exists():

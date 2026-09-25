@@ -17,7 +17,7 @@ from smart_organizer.application.services.events import (
     FileSkippedEvent,
     InfoEvent,
 )
-from smart_organizer.core.logger import OrganizerLogger
+from smart_organizer.core.logger import OrganizerLoggerProtocol
 
 
 class EventEmitterLogger:
@@ -27,7 +27,11 @@ class EventEmitterLogger:
     for persistent storage while still emitting structured events.
     """
 
-    def __init__(self, bus: EventBus, file_logger: Optional[OrganizerLogger] = None) -> None:
+    def __init__(
+        self,
+        bus: EventBus,
+        file_logger: Optional[OrganizerLoggerProtocol] = None,
+    ) -> None:
         self.bus = bus
         self.file_logger = file_logger
 
