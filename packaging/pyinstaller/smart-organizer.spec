@@ -105,7 +105,6 @@ WATCHDOG_HIDDEN_IMPORTS = {
     ],
     "win32": [
         "watchdog.observers.read_directory_changes",
-        "watchdog.observers.read_directory_changes_windows",
         "watchdog.observers.winapi",
     ],
 }
