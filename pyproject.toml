@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "smart-file-organizer"
-version = "1.0.0"
+dynamic = ["version"]
 description = "A lightweight cross-platform CLI utility that automatically sorts downloads into category folders."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -42,6 +42,9 @@ gui = [
 
 [project.scripts]
 smart-organizer = "smart_organizer.cli:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "smart_organizer.__version__" }
 
 [tool.setuptools.packages.find]
 where = ["src"]
