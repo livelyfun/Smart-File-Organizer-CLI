@@ -37,6 +37,13 @@ APP_NAME = "smart-organizer"
 
 WIN_VERSION_FILE = ""
 
+# PyInstaller reports a hidden import it cannot find at ERROR level but
+# still finishes and still emits a binary. That turns a typo into a bundle
+# that builds cleanly and is quietly missing a module, so the warnings are
+# written to a file that packaging/build.py inspects and fails on.
+WARN_FILE = str(Path(SPEC_DIR).resolve() / "_build_warnings.txt")
+Path(WARN_FILE).unlink(missing_ok=True)
+
 if sys.platform == "win32":
     # Windows executables carry a VERSIONINFO resource. Generate it rather
     # than committing a file that would need editing on every release.
@@ -98,10 +105,13 @@ WATCHDOG_HIDDEN_IMPORTS = {
     "linux": [
         "watchdog.observers.inotify",
         "watchdog.observers.inotify_buffer",
-        "watchdog.observers.inotify_cobalt",
+        "watchdog.observers.inotify_c",
     ],
+    # watchdog's darwin branch tries fsevents, then kqueue, then polling,
+    # so both native backends are named explicitly.
     "darwin": [
         "watchdog.observers.fsevents",
+        "watchdog.observers.kqueue",
     ],
     "win32": [
         "watchdog.observers.read_directory_changes",
@@ -171,6 +181,7 @@ a = Analysis(
     runtime_hooks=[],
     excludes=excludes,
     noarchive=False,
+    warn_file=WARN_FILE,
 )
 
 pyz = PYZ(a.pure)
