@@ -118,10 +118,30 @@ def test_a_pull_request_build_cannot_reach_the_write_steps(release):
     write token, and the tag is re-derived from the repository afterwards
     rather than trusted from the event.
     """
-    resolve = _step(release, "release", "Resolve the build and version to release")["run"]
+    step = _step(release, "release", "Resolve the build and version to release")
+    resolve = step["run"]
 
-    assert '"${GITHUB_EVENT_WORKFLOW_RUN_EVENT}" != "push"' in resolve
+    assert '"${SOURCE_EVENT}" != "push"' in resolve
     assert "git tag --points-at" in resolve, "the tag must come from the repository, not the payload"
+
+
+def test_the_triggering_event_kind_is_passed_in_from_the_payload(release):
+    """GitHub does not export the triggering event as an environment variable.
+
+    GITHUB_WORKFLOW_RUN_ID and GITHUB_WORKFLOW_RUN_HEAD_SHA exist, but the
+    event that started the run is only in the payload. Reading
+    GITHUB_EVENT_WORKFLOW_RUN_EVENT fails the step under `set -u` with
+    "unbound variable", which is how the first live run of this workflow
+    ended. The name has to be given to the step explicitly, and a structural
+    check cannot tell an invented variable from a real one, so the mapping
+    from the payload is what is asserted.
+    """
+    step = _step(release, "release", "Resolve the build and version to release")
+
+    assert "GITHUB_EVENT_WORKFLOW_RUN_EVENT" not in step["run"]
+    assert step["env"]["SOURCE_EVENT"] == "${{ github.event.workflow_run.event }}", (
+        "the triggering event kind must be passed into the step from the payload"
+    )
 
 
 def test_release_holds_only_the_permissions_it_needs(release):

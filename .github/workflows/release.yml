@@ -50,6 +50,12 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           INPUT_RUN_ID: ${{ inputs.run_id }}
           INPUT_VERSION: ${{ inputs.version }}
+          # What started the Build. GitHub exports the triggering run's id and
+          # commit as GITHUB_WORKFLOW_RUN_ID and GITHUB_WORKFLOW_RUN_HEAD_SHA,
+          # but the kind of event that started it is only in the payload, so it
+          # is passed in here. An empty value on workflow_dispatch is expected
+          # and is never read, because that branch is not taken.
+          SOURCE_EVENT: ${{ github.event.workflow_run.event }}
         run: |
           set -euo pipefail
 
@@ -57,8 +63,8 @@ jobs:
             # A pull request's Build must never reach a step holding a token
             # that can write to the repository. Only a push can, and the tag
             # is confirmed again below.
-            if [ "${GITHUB_EVENT_WORKFLOW_RUN_EVENT}" != "push" ]; then
-              echo "Build came from ${GITHUB_EVENT_WORKFLOW_RUN_EVENT}, not a push; nothing to release."
+            if [ "${SOURCE_EVENT}" != "push" ]; then
+              echo "Build came from ${SOURCE_EVENT}, not a push; nothing to release."
               echo "skip=true" >> "${GITHUB_OUTPUT}"
               exit 0
             fi
