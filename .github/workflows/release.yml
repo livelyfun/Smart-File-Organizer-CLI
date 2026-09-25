@@ -81,10 +81,12 @@ jobs:
           else
             run_id="${INPUT_RUN_ID}"
             if [ -z "${run_id}" ]; then
-              run_id=$(gh run list --workflow Build --status success --limit 1 --json databaseId --jq '.[0].databaseId // empty')
+              run_id=$(gh run list --repo "${GITHUB_REPOSITORY}" --workflow Build --status success --limit 1 --json databaseId --jq '.[0].databaseId // empty')
             fi
             [ -n "${run_id}" ] || { echo "error: no successful Build run to release" >&2; exit 1; }
-            ref=$(gh run view "${run_id}" --json headSha --jq '.headSha')
+            # --repo is required: gh infers the repository from the git
+            # checkout, and this step runs before there is one.
+            ref=$(gh run view --repo "${GITHUB_REPOSITORY}" "${run_id}" --json headSha --jq '.headSha')
           fi
 
           # The version comes from the tag on that exact commit, looked up in

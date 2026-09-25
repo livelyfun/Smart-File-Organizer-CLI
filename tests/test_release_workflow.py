@@ -409,6 +409,21 @@ def test_update_service_reads_the_manifest_the_release_publishes(release):
     assert upload["with"]["path"] == "manifest/latest.json"
 
 
+def test_gh_is_told_which_repository(release):
+    """gh cannot infer the repository before there is a checkout.
+
+    The resolve step runs before actions/checkout, because the checkout is
+    pinned to the commit that step discovers. On the manual path it calls gh
+    first, and gh works out the base repository from the git checkout, so
+    without --repo it fails with "not a git repository". The automatic path
+    never calls gh, which is why only a manual release hit it.
+    """
+    resolve = _step(release, "release", "Resolve the build and version to release")["run"]
+
+    for invocation in re.findall(r"gh run (?:list|view)[^\n]*", resolve):
+        assert "--repo " in invocation, f"gh is called without --repo here: {invocation}"
+
+
 def test_release_does_not_rebuild(release):
     """No packaging step may appear in the release workflow.
 
