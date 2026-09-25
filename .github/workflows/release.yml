@@ -123,23 +123,30 @@ jobs:
             v[0-9]*) ;;
             *) echo "error: release tags look like v1.2.3, not ${TAG}" >&2; exit 1 ;;
           esac
-          packaged=$(python - <<'PY'
-          import pathlib, re
 
-          text = pathlib.Path("src/smart_organizer/__init__.py").read_text(encoding="utf-8")
-          match = re.search(r'__version__\s*=\s*["\']([^"\']+)["\']', text)
+          # The comparison is written in Python rather than shell so that one
+          # implementation decides it, and the version is read from the source
+          # with the same expression packaging/build.py uses.
+          python - "${TAG}" <<'PY'
+          import pathlib
+          import re
+          import sys
+
+          tag = sys.argv[1]
+          source = pathlib.Path("src/smart_organizer/__init__.py").read_text(encoding="utf-8")
+          match = re.search(r'__version__\s*=\s*["\']([^"\']+)["\']', source)
           if match is None:
               raise SystemExit("error: __version__ not found in smart_organizer/__init__.py")
-          print(match.group(1))
+
+          packaged = match.group(1)
+          print(f"tag:      {tag}")
+          print(f"packaged: {packaged}")
+          if tag[1:] != packaged:
+              raise SystemExit(
+                  f"error: tag {tag} does not match __version__ {packaged}.\n"
+                  "Bump __version__ and the tag together, then push the tag again."
+              )
           PY
-          )
-          echo "tag:      ${TAG}"
-          echo "packaged: ${packaged}"
-          if [ "${TAG#v}" != "${packaged}" ]; then
-            echo "error: tag ${TAG} does not match __version__ ${packaged}." >&2
-            echo "Bump __version__ and the tag together, then push the tag again." >&2
-            exit 1
-          fi
 
       - name: Download the built artifacts
         if: steps.target.outputs.skip != 'true'
