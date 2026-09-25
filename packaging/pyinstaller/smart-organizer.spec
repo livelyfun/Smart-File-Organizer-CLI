@@ -163,6 +163,10 @@ excludes = [
     "pip",
 ]
 
+# A multi-resolution .ico is only meaningful for a Windows executable.
+# Regenerate with: python packaging/tools/make_icon.py
+ICON_FILE = str(SPEC_DIR / "app.ico") if sys.platform == "win32" else None
+
 a = Analysis(
     [str(SRC / "smart_organizer" / "__main__.py")],
     pathex=[str(SRC)],
@@ -195,6 +199,7 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     version=(WIN_VERSION_FILE or None),
+    icon=ICON_FILE,
 )
 
 coll = COLLECT(
