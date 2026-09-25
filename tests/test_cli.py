@@ -5,6 +5,8 @@ import signal
 from pathlib import Path
 from typing import List
 
+import pytest
+
 from smart_organizer.application import OrganizerService
 from smart_organizer.application.services.events import (
     BatchCompleteEvent,
@@ -178,3 +180,46 @@ def test_cli_live_mode_reports_failure_when_watcher_dies(tmp_path: Path, monkeyp
 
     assert ret == 1
     assert "Stopped cleanly." in capsys.readouterr().out
+
+
+class TestShutdownHandlers:
+    """The stop signals the CLI registers must cover the platform's."""
+
+    def test_registers_sigint_and_sigterm(self, monkeypatch):
+        from smart_organizer.cli import install_shutdown_handlers
+
+        registered = {}
+        monkeypatch.setattr(
+            signal, "signal", lambda sig, handler: registered.setdefault(sig, handler)
+        )
+
+        def handler(signum, frame):  # pragma: no cover - never invoked
+            pass
+
+        install_shutdown_handlers(handler)
+
+        assert signal.SIGINT in registered
+        assert signal.SIGTERM in registered
+        assert registered[signal.SIGINT] is handler
+        assert registered[signal.SIGTERM] is handler
+
+    @pytest.mark.skipif(
+        not hasattr(signal, "SIGBREAK"), reason="SIGBREAK is Windows-only"
+    )
+    def test_registers_sigbreak_on_windows(self, monkeypatch):
+        """Ctrl+Break must not kill the process mid-file-move on Windows."""
+        from smart_organizer.cli import install_shutdown_handlers
+
+        registered = {}
+        monkeypatch.setattr(
+            signal, "signal", lambda sig, handler: registered.setdefault(sig, handler)
+        )
+
+        def handler(signum, frame):  # pragma: no cover - never invoked
+            pass
+
+        handled = install_shutdown_handlers(handler)
+
+        assert signal.SIGBREAK in registered
+        assert signal.SIGBREAK in handled
+        assert registered[signal.SIGBREAK] is handler
