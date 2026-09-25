@@ -155,12 +155,25 @@ having certificates.
 
 ## Release process
 
+Steps 1 to 4 are the whole process. Pushing a version tag is what publishes
+everything else, so there is no manual artifact upload to get wrong.
+
 1. Bump `__version__` in `src/smart_organizer/__init__.py`.
 2. Update `CHANGELOG` if present.
 3. Merge to `main` and confirm both CI and Build workflows are green.
 4. Tag `v<version>` and push the tag.
-5. Attach the artifacts and their `.sha256` files to the GitHub release, and
-   publish `latest.json` for the update check:
+
+The tag triggers `Build`, which builds and smoke-tests all three platforms. If
+that succeeds, `Release` fires on the finished run and does the rest:
+
+- Takes the artifacts from that exact Build run instead of rebuilding, so a
+  release is the set of binaries that passed the smoke test.
+- Refuses to continue unless the tag matches `__version__` in the source being
+  released, so a forgotten version bump cannot ship.
+- Attaches each installer with its `.sha256` sidecar. An artifact without a
+  sidecar fails the release, because both installers refuse to install a
+  download they cannot verify.
+- Publishes `latest.json` to GitHub Pages, which is what `--check-update` reads:
 
 ```json
 {
@@ -170,5 +183,25 @@ having certificates.
 }
 ```
 
-`update_service.py` reads that manifest and nothing else, so publishing it
-is the only step needed for `--check-update` to start reporting the release.
+`update_service.py` reads that manifest and nothing else, so publishing it is
+the only step needed for `--check-update` to start reporting the release.
+
+### Trying the release workflow without publishing
+
+`Release` also runs from `Actions`. It defaults to a dry run, which downloads
+the artifacts, applies every check and prints the manifest, then stops before
+creating anything. Pass `dry_run: false` to publish, and `run_id` to release a
+specific Build rather than the most recent one.
+
+The workflow's shell steps are covered by `tests/test_release_workflow.py`,
+which runs them against a synthetic artifact tree, because CI cannot exercise a
+workflow that publishes a real release.
+
+### One-time setup
+
+GitHub Pages has to be enabled once in the repository settings, with
+**Settings → Pages → Build and deployment → Source: GitHub Actions**. Until
+that is done the release is published but the manifest is not, so
+`--check-update` will keep reporting no update. The Pages job is marked
+`continue-on-error` so this misconfiguration is reported without making a
+correctly published release look failed.

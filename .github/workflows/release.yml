@@ -1,0 +1,253 @@
+name: Release
+
+# Turns a green Build of a version tag into a downloadable release, and
+# publishes the manifest the update check reads.
+#
+# It reuses the artifacts the Build workflow already produced rather than
+# rebuilding, so a release is exactly the set of binaries that passed the
+# smoke test, not a second build that happens to look similar.
+on:
+  workflow_run:
+    workflows: ["Build"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release, e.g. 1.2.0. Only needed for a build with no tag."
+        required: false
+        type: string
+      run_id:
+        description: "Build run to take the artifacts from. Defaults to the latest successful Build."
+        required: false
+        type: string
+      dry_run:
+        description: "Check everything, then stop before creating the release or deploying."
+        required: false
+        default: true
+        type: boolean
+
+concurrency:
+  group: release-${{ github.event.workflow_run.head_branch || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Publish the release
+    runs-on: ubuntu-latest
+    permissions:
+      # Creating and replacing the release.
+      contents: write
+      # Reading the artifacts of the Build run that triggered this one.
+      actions: read
+
+    steps:
+      # Nothing may be released from a commit that is not the one that was
+      # built, so the ref is resolved before anything is checked out and the
+      # checkout is pinned to it below.
+      - name: Resolve the build and version to release
+        id: target
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          INPUT_RUN_ID: ${{ inputs.run_id }}
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_run" ]; then
+            # A pull request's Build must never reach a step holding a token
+            # that can write to the repository. Only a push can, and the tag
+            # is confirmed again below.
+            if [ "${GITHUB_EVENT_WORKFLOW_RUN_EVENT}" != "push" ]; then
+              echo "Build came from ${GITHUB_EVENT_WORKFLOW_RUN_EVENT}, not a push; nothing to release."
+              echo "skip=true" >> "${GITHUB_OUTPUT}"
+              exit 0
+            fi
+            run_id="${GITHUB_WORKFLOW_RUN_ID}"
+            ref="${GITHUB_WORKFLOW_RUN_HEAD_SHA}"
+          else
+            run_id="${INPUT_RUN_ID}"
+            if [ -z "${run_id}" ]; then
+              run_id=$(gh run list --workflow Build --status success --limit 1 --json databaseId --jq '.[0].databaseId // empty')
+            fi
+            [ -n "${run_id}" ] || { echo "error: no successful Build run to release" >&2; exit 1; }
+            ref=$(gh run view "${run_id}" --json headSha --jq '.headSha')
+          fi
+
+          # The version comes from the tag on that exact commit, looked up in
+          # the repository rather than trusted from the event payload. That is
+          # what makes it safe for this workflow to hold a write token.
+          git init --quiet
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          git fetch --quiet --force --tags origin
+          if ! git cat-file -e "${ref}^{commit}" 2>/dev/null; then
+            echo "error: commit ${ref} is not reachable in ${GITHUB_REPOSITORY}" >&2
+            exit 1
+          fi
+          tag=$(git tag --points-at "${ref}" | grep -E '^v[0-9]' | head -1 || true)
+
+          if [ -z "${tag}" ]; then
+            if [ -n "${INPUT_VERSION}" ]; then
+              tag="v${INPUT_VERSION}"
+              echo "note: build ${run_id} is not on a tag; using the requested version."
+            else
+              echo "Build ${run_id} is not on a version tag; nothing to release."
+              echo "skip=true" >> "${GITHUB_OUTPUT}"
+              exit 0
+            fi
+          fi
+
+          echo "run_id=${run_id}" >> "${GITHUB_OUTPUT}"
+          echo "ref=${ref}" >> "${GITHUB_OUTPUT}"
+          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
+
+      - name: Check out the exact build
+        if: steps.target.outputs.skip != 'true'
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ steps.target.outputs.ref }}
+          persist-credentials: false
+
+      # A tag that disagrees with the version in the source ships a release
+      # whose installer, download URL and manifest all name a version the
+      # binary does not report. Refusing here is the whole point.
+      - name: Confirm the tag matches the packaged version
+        if: steps.target.outputs.skip != 'true'
+        env:
+          TAG: ${{ steps.target.outputs.tag }}
+        run: |
+          set -euo pipefail
+          # Build only runs for v* tags, and every download URL and the
+          # manifest name the tag, so the format is asserted here rather than
+          # assumed.
+          case "${TAG}" in
+            v[0-9]*) ;;
+            *) echo "error: release tags look like v1.2.3, not ${TAG}" >&2; exit 1 ;;
+          esac
+          packaged=$(python - <<'PY'
+          import pathlib, re
+
+          text = pathlib.Path("src/smart_organizer/__init__.py").read_text(encoding="utf-8")
+          match = re.search(r'__version__\s*=\s*["\']([^"\']+)["\']', text)
+          if match is None:
+              raise SystemExit("error: __version__ not found in smart_organizer/__init__.py")
+          print(match.group(1))
+          PY
+          )
+          echo "tag:      ${TAG}"
+          echo "packaged: ${packaged}"
+          if [ "${TAG#v}" != "${packaged}" ]; then
+            echo "error: tag ${TAG} does not match __version__ ${packaged}." >&2
+            echo "Bump __version__ and the tag together, then push the tag again." >&2
+            exit 1
+          fi
+
+      - name: Download the built artifacts
+        if: steps.target.outputs.skip != 'true'
+        uses: actions/download-artifact@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ steps.target.outputs.run_id }}
+          pattern: smart-organizer-*
+          path: downloaded
+          merge-multiple: false
+
+      # Each Build artifact also contains the raw onedir bundle, which is
+      # identical on every platform and is not a release asset. Only the
+      # installer files and their sidecars are collected.
+      - name: Collect the release assets
+        if: steps.target.outputs.skip != 'true'
+        env:
+          RELEASE_RUN_ID: ${{ steps.target.outputs.run_id }}
+          TAG: ${{ steps.target.outputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p release manifest
+          find downloaded -type f \
+            \( -name '*.tar.xz' -o -name '*.dmg' -o -name '*.exe' -o -name '*.sha256' \) \
+            -exec cp {} release/ \;
+
+          shopt -s nullglob
+          assets=(release/*.tar.xz release/*.dmg release/*.exe)
+          if [ ${#assets[@]} -eq 0 ]; then
+            echo "error: build ${RELEASE_RUN_ID} produced no release assets" >&2
+            exit 1
+          fi
+
+          # The install scripts will not install a download they cannot verify,
+          # so a missing sidecar is a failed release rather than a warning.
+          for asset in "${assets[@]}"; do
+            if [ ! -f "${asset}.sha256" ]; then
+              echo "error: ${asset} has no .sha256 sidecar" >&2
+              exit 1
+            fi
+          done
+
+          # The shape is what update_service.Release expects, so the update
+          # check parses what is published here rather than something similar.
+          cat > manifest/latest.json <<JSON
+          {
+            "version": "${TAG#v}",
+            "published_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "notes_url": "https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}"
+          }
+          JSON
+
+          echo "release assets:"
+          ls -l release
+
+      - name: Summarise the release
+        if: steps.target.outputs.skip != 'true'
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
+          TAG: ${{ steps.target.outputs.tag }}
+        run: |
+          echo "tag: ${TAG}"
+          cat manifest/latest.json
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ] && [ "${DRY_RUN}" = "true" ]; then
+            echo "dry run: stopping before creating the release and deploying the site."
+          fi
+
+      # --verify-tag refuses to invent a tag that is not really in the
+      # repository, and --clobber replaces the assets of an earlier attempt
+      # instead of failing, which is what makes a re-run after a partial
+      # failure safe.
+      - name: Create the GitHub release
+        if: steps.target.outputs.skip != 'true' && !(github.event_name == 'workflow_dispatch' && inputs.dry_run)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.target.outputs.tag }}
+        run: |
+          set -euo pipefail
+          gh release create "${TAG}" release/* \
+            --title "Smart File Organizer ${TAG}" \
+            --verify-tag \
+            --generate-notes \
+            --clobber
+
+      - name: Upload the manifest
+        if: steps.target.outputs.skip != 'true' && !(github.event_name == 'workflow_dispatch' && inputs.dry_run)
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: manifest/latest.json
+
+  pages:
+    name: Deploy the update manifest
+    needs: release
+    if: >-
+      needs.release.result == 'success' &&
+      !(github.event_name == 'workflow_dispatch' && inputs.dry_run)
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    # Pages has to be enabled once in the repository settings, which no
+    # workflow can do on its own. The release is already published by this
+    # point, so a failure here is reported without implying the release failed.
+    continue-on-error: true
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v5
