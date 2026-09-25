@@ -39,6 +39,9 @@ dev = [
 gui = [
     "PySide6>=6.5.0",
 ]
+build = [
+    "pyinstaller>=6.10.0,<7",
+]
 
 [project.scripts]
 smart-organizer = "smart_organizer.cli:main"

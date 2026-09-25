@@ -15,6 +15,11 @@ dist/
 *.egg-info/
 .eggs/
 
+# Frozen build working directories
+.build-venv/
+packaging/pyinstaller/_version_info.txt
+packaging/output/
+
 # Test / coverage
 .pytest_cache/
 .coverage
