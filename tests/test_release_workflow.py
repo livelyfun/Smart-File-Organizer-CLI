@@ -577,3 +577,65 @@ def test_every_variable_a_step_reads_is_one_it_can_actually_have(workflow_name):
         "these are read but never provided, so the step fails under set -u: "
         + "; ".join(unreadable)
     )
+
+
+# The verbs that can follow a gh command name, used to tell "gh release create"
+# from "gh release view --repo x".
+GH_VERBS = {"create", "upload", "edit", "view", "list", "run", "dispatch", "download", "delete"}
+
+
+def _gh_supported_flags(subcommand):
+    result = subprocess.run(
+        ["gh", *subcommand, "--help"], capture_output=True, text=True
+    )
+    if result.returncode != 0:
+        return None
+    return set(re.findall(r"--([a-z][a-z-]+)", result.stdout))
+
+
+def _gh_invocations(script):
+    """Every gh command in a script, as a subcommand and the flags it passes."""
+    # Join line continuations, so a multi-line invocation is one command.
+    body = _code(script).replace("\\\n", " ")
+    for line in body.splitlines():
+        if "gh " not in line:
+            continue
+        for call in re.findall(r"\bgh\s+(.*)$", line):
+            words = call.split()
+            if not words:
+                continue
+            subcommand = [words[0].strip("\"'")]
+            rest = words[1:]
+            if rest and not rest[0].startswith("-") and rest[0] in GH_VERBS:
+                subcommand.append(rest[0])
+                rest = rest[1:]
+            yield " ".join(subcommand), [word for word in rest if word.startswith("--")]
+
+
+@pytest.mark.skipif(shutil.which("gh") is None, reason="gh is needed to read its own flags")
+@pytest.mark.parametrize("workflow_name", ["release", "build"])
+def test_gh_is_only_called_with_flags_it_has(workflow_name):
+    """No flag is used that the installed gh does not accept.
+
+    gh exits with "unknown flag" before doing anything, and a flag that reads
+    as though it belongs somewhere it does not is not caught by reading the
+    workflow: `gh release create --clobber` is a plausible-looking command
+    that failed on its first live run, because --clobber belongs to
+    `gh release upload`. Asking gh is the only authority on this, and it is the
+    same version the runner will use.
+    """
+    workflow = _load(ROOT / ".github" / "workflows" / f"{workflow_name}.yml")
+    unknown = []
+
+    for job in workflow["jobs"].values():
+        for step in job["steps"]:
+            for subcommand, flags in _gh_invocations(step.get("run", "")):
+                supported = _gh_supported_flags(subcommand.split())
+                if supported is None:
+                    unknown.append(f"{workflow_name}.yml: `gh {subcommand}` is not a command")
+                    continue
+                for flag in flags:
+                    if flag[2:] not in supported:
+                        unknown.append(f"{workflow_name}.yml: `gh {subcommand} {flag}` is unknown")
+
+    assert not unknown, "; ".join(unknown)

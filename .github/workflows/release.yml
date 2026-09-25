@@ -236,10 +236,12 @@ jobs:
             echo "dry run: stopping before creating the release and deploying the site."
           fi
 
-      # --verify-tag refuses to invent a tag that is not really in the
-      # repository, and --clobber replaces the assets of an earlier attempt
-      # instead of failing, which is what makes a re-run after a partial
-      # failure safe.
+      # A re-run after a partial failure has to replace the assets rather than
+      # refuse, so an existing release is uploaded to instead of created.
+      #
+      # --latest is deliberately not forced. This can be an older version, and
+      # install.sh follows whatever GitHub marks as latest, so pointing that
+      # backwards would offer users a downgrade.
       - name: Create the GitHub release
         if: steps.target.outputs.skip != 'true' && !(github.event_name == 'workflow_dispatch' && inputs.dry_run)
         env:
@@ -247,11 +249,17 @@ jobs:
           TAG: ${{ steps.target.outputs.tag }}
         run: |
           set -euo pipefail
-          gh release create "${TAG}" release/* \
-            --title "Smart File Organizer ${TAG}" \
-            --verify-tag \
-            --generate-notes \
-            --clobber
+          if gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            echo "release ${TAG} already exists; replacing its assets"
+            gh release upload "${TAG}" release/* --repo "${GITHUB_REPOSITORY}" --clobber
+          else
+            # --verify-tag refuses to invent a tag that is not really in the
+            # repository.
+            gh release create "${TAG}" release/* --repo "${GITHUB_REPOSITORY}" \
+              --title "Smart File Organizer ${TAG}" \
+              --verify-tag \
+              --generate-notes
+          fi
 
       - name: Upload the manifest
         if: steps.target.outputs.skip != 'true' && !(github.event_name == 'workflow_dispatch' && inputs.dry_run)
