@@ -216,6 +216,27 @@ parse_mount_point() {
     grep -o '/Volumes/.*' | head -1 | sed -e 's/[[:space:]]*$//' || true
 }
 
+# Mounts an image read-only at a random unused path and prints the mount point.
+#
+# This is the only place the installer mounts anything, and the Build workflow
+# calls it against a freshly built DMG. Keeping it separate from the install
+# itself is what lets the build check the real code rather than a copy of it:
+# a duplicated mount command is free to drift until a user's Mac finds out.
+#
+# -mountrandom takes the directory to create the random path under. Passing it
+# without one is an error, so the argument is written out rather than assumed.
+attach_dmg() {
+    local image="$1" mount_point
+    # hdiutil's own exit status is deliberately not the answer here. It can
+    # fail while still printing a usable mount point, and with `set -e` a
+    # non-zero pipeline would end the script before the check below could
+    # explain what happened.
+    mount_point=$(hdiutil attach "${image}" -nobrowse -readonly -mountrandom /Volumes \
+                  | parse_mount_point || true)
+    [ -n "${mount_point}" ] || die "could not mount $(basename "${image}"): hdiutil reported no mount point"
+    printf '%s' "${mount_point}"
+}
+
 install_macos() {
     local version="$1" tmp mount_point=""
     tmp="$(mktemp -d)"
@@ -233,9 +254,7 @@ install_macos() {
     verify_checksum "${tmp}/${dmg}" "${expected}"
 
     require hdiutil
-    mount_point="$(hdiutil attach "${tmp}/${dmg}" -nobrowse -readonly -mountrandom \
-                  | parse_mount_point)"
-    [ -n "${mount_point}" ] || die "could not mount ${dmg}: hdiutil reported no mount point"
+    mount_point="$(attach_dmg "${tmp}/${dmg}")"
 
     # The bundle is staged inside a directory, so it is not at the volume
     # root. Getting this path wrong copies nothing and leaves the user with

@@ -82,29 +82,33 @@ jobs:
       # shows up on a user's Mac. Mounting the image here is the one place it
       # can be caught on a build, and running the executable out of it proves
       # the whole path rather than just the directory names.
+      #
+      # The mount runs through install.sh's own attach_dmg and the path is
+      # built from its DMG_VOLUME_DIR and APP_NAME. Re-deriving the command
+      # here instead would leave two copies to keep in step, which is how the
+      # layout mismatch this step exists to catch got there in the first place.
       - name: Verify DMG layout
         if: runner.os == 'macOS'
         shell: bash
         run: |
           set -euo pipefail
-          dmg=$(ls packaging/output/*.dmg)
-          # The same parse as scripts/install.sh's parse_mount_point, whose
-          # path this step exists to verify: hdiutil pads its columns with
-          # whitespace rather than a dependable tab.
-          mount_point=$(hdiutil attach "$dmg" -nobrowse -readonly -mountrandom \
-            | grep -o '/Volumes/.*' | head -1 | sed -e 's/[[:space:]]*$//' || true)
-          if [ -z "$mount_point" ]; then
-            echo "error: hdiutil reported no mount point" >&2
+          shopt -s nullglob
+          images=(packaging/output/*.dmg)
+          if [ ${#images[@]} -ne 1 ]; then
+            echo "error: expected one DMG, found ${#images[@]}" >&2
             exit 1
           fi
+          mount_point=$(bash -c 'source scripts/install.sh; attach_dmg "$1"' -- "${images[0]}")
           trap 'hdiutil detach "$mount_point" -quiet || true' EXIT
-          bundle="$mount_point/Smart File Organizer/smart-organizer/smart-organizer"
-          if [ ! -d "$mount_point/Smart File Organizer/smart-organizer" ]; then
-            echo "error: $dmg does not contain Smart File Organizer/smart-organizer" >&2
-            ls -la "$mount_point" >&2
+
+          relative=$(bash -c 'source scripts/install.sh; printf "%s/%s/smart-organizer" "$DMG_VOLUME_DIR" "$APP_NAME"')
+          bundle="${mount_point}/${relative}"
+          if [ ! -x "$bundle" ]; then
+            echo "error: ${images[0]} does not contain an executable at ${relative}" >&2
+            find "$mount_point" -maxdepth 3 >&2
             exit 1
           fi
-          "$bundle" --version
+          echo "running $("$bundle" --version) from $bundle"
 
       # The behavioural gate. A bundle that starts but cannot watch is the
       # failure this application is most likely to ship, so it is checked

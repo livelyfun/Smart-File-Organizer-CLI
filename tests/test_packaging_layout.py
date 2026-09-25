@@ -12,6 +12,7 @@ ones the build produces.
 """
 
 import importlib.util
+import os
 import re
 import shutil
 import subprocess
@@ -64,6 +65,109 @@ def install_ps1():
 @pytest.fixture(scope="module")
 def bash():
     return shutil.which("bash") or "bash"
+
+
+@pytest.fixture(scope="module")
+def build_workflow():
+    """The Build workflow, which mounts the DMG it just built on macOS."""
+    import yaml
+
+    path = ROOT / ".github" / "workflows" / "build.yml"
+    return yaml.safe_load(path.read_text(encoding="utf-8"))
+
+
+# A stand-in for hdiutil that validates its own arguments the way the real one
+# does, and reports a mount the way macOS does. This lets the installer's
+# macOS path be tested on any platform, which is the only way -mountrandom's
+# missing argument could have been caught before release.
+FAKE_HDIOUTIL = """#!/bin/sh
+# Minimal hdiutil attach, faithful about the two things that matter here:
+# an option that takes an argument, and the columns of its output.
+if [ "$1" != "attach" ]; then
+    echo "hdiutil: $1: unsupported" >&2
+    exit 64
+fi
+shift
+while [ $# -gt 0 ]; do
+    if [ "$1" = "-mountrandom" ]; then
+        shift
+        if [ $# -eq 0 ]; then
+            echo 'hdiutil: attach: missing "-mountrandom" argument' >&2
+            exit 1
+        fi
+    fi
+    shift
+done
+if [ "${FAKE_HDIOUTIL_FAILS:-0}" = "1" ]; then
+    echo "/dev/disk4          GPT_partition_scheme"
+    exit 1
+fi
+printf '/dev/disk4          GPT_partition_scheme\\n'
+printf '/dev/disk4s1        Apple_HFS                       /Volumes/%s\\n' \\
+    "${FAKE_HDIOUTIL_VOLUME:-Smart File Organizer}"
+"""
+
+MOUNT_POINT = "/Volumes/Smart File Organizer"
+
+
+def _attach_with_fake_hdiutil(bash, tmp_path, fails=False):
+    """Run attach_dmg from install.sh against a fake hdiutil on PATH."""
+    tools = tmp_path / "bin"
+    tools.mkdir()
+    hdiutil = tools / "hdiutil"
+    hdiutil.write_text(FAKE_HDIOUTIL, encoding="utf-8")
+    hdiutil.chmod(0o755)
+    (tmp_path / "image.dmg").write_text("not really an image")
+
+    return subprocess.run(
+        [
+            bash,
+            "-c",
+            'set -euo pipefail; source "$1"; attach_dmg "$2"',
+            "sh",
+            str(INSTALL_SH),
+            str(tmp_path / "image.dmg"),
+        ],
+        env={
+            # The installer reads HOME while being sourced, and the fake
+            # directory comes first so the real hdiutil cannot be reached.
+            **os.environ,
+            "PATH": f"{tools}:/usr/bin:/bin",
+            "FAKE_HDIOUTIL_VOLUME": MOUNT_POINT.rsplit("/", 1)[1],
+            "FAKE_HDIOUTIL_FAILS": "1" if fails else "0",
+        },
+        capture_output=True,
+        text=True,
+    )
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="bash is needed to run the installer")
+def test_attach_dmg_mounts_and_reports_the_mount_point(bash, tmp_path):
+    """The installer's own mount call works, argument and all.
+
+    The volume name contains spaces, so a mount point that is truncated or
+    left padded is the difference between a working install and an empty
+    directory.
+    """
+    result = _attach_with_fake_hdiutil(bash, tmp_path)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout == MOUNT_POINT
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="bash is needed to run the installer")
+def test_attach_dmg_fails_loudly_when_the_image_will_not_mount(bash, tmp_path):
+    """A mount that produces no path must not look like a successful install.
+
+    hdiutil can exit non-zero and still print a scheme line with no mount
+    point, so an empty result has to stop the install with a message rather
+    than copying from a path of "".
+    """
+    result = _attach_with_fake_hdiutil(bash, tmp_path, fails=True)
+
+    assert result.returncode != 0
+    assert "could not mount" in result.stderr
+    assert "image.dmg" in result.stderr
 
 
 @pytest.mark.parametrize(
@@ -138,6 +242,42 @@ def test_sidecar_naming_matches_how_the_installers_request_it(build, install_sh,
     assert Path(artifact).with_name(f"{artifact}.sha256").name == (
         f"smart-organizer-{VERSION}-linux-x86_64.tar.xz.sha256"
     )
+
+
+def test_mountrandom_is_given_the_directory_to_mount_under(install_sh):
+    """-mountrandom takes a path, and the install was broken without one.
+
+    hdiutil fails with 'missing "-mountrandom" argument' and mounts nothing, so
+    every macOS install from a release image stopped before it copied anything.
+    Nothing local could catch this, because hdiutil only exists on macOS,
+    which is why the Build workflow mounts the image it just built.
+    """
+    assert re.search(r"-mountrandom\s+\S", install_sh), (
+        "scripts/install.sh passes -mountrandom without the directory to mount "
+        "under; hdiutil will refuse to attach"
+    )
+
+
+def test_build_mounts_the_dmg_through_the_installer(build_workflow, install_sh):
+    """The build check must run the installer's code, not a copy of it.
+
+    The check exists to catch a mismatch between the two files. If it spelled
+    out its own hdiutil command it would be a third thing to keep in step, and
+    a change to the installer would not be checked at all.
+    """
+    step = None
+    for candidate in build_workflow["jobs"]["build"]["steps"]:
+        if candidate.get("name") == "Verify DMG layout":
+            step = candidate["run"]
+
+    assert step, "build.yml no longer verifies the DMG layout"
+    assert "source scripts/install.sh" in step, (
+        "the DMG check must source the installer instead of duplicating it"
+    )
+    assert "attach_dmg" in step
+    assert "DMG_VOLUME_DIR" in step, "the path must come from the installer's own names"
+    # The function the check calls is defined by the installer, not by itself.
+    assert "attach_dmg()" in install_sh
 
 
 def _parse_mount_point(bash, sample):
