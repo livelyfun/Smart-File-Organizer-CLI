@@ -35,6 +35,8 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0.0",
+    # Reads the workflow files so their shell steps can be run as tests.
+    "pyyaml>=6.0.0",
 ]
 gui = [
     "PySide6>=6.5.0",
