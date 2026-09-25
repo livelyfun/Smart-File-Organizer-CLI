@@ -126,7 +126,7 @@ def clean() -> None:
         shutil.rmtree(stale, ignore_errors=True)
 
 
-def check_warnings(warn_file: Path) -> None:
+def check_hidden_imports(output: str) -> None:
     """Fail the build if a declared hidden import could not be found.
 
     PyInstaller logs an unresolvable hidden import at ERROR level and then
@@ -134,16 +134,15 @@ def check_warnings(warn_file: Path) -> None:
     missing module is exercised at runtime, which is exactly the class of
     defect the explicit hidden imports exist to prevent, so it is treated
     as a build failure here instead.
-    """
-    if not warn_file.is_file():
-        _fail(
-            f"expected a PyInstaller warnings file at {warn_file}, but none was "
-            "produced; the spec may have stopped short of the Analysis step"
-        )
 
+    The message is read from the build output rather than a warn file
+    because a spec-supplied warn_file is not reliably written outside the
+    spec directory, and a check that silently finds nothing is worse than
+    no check at all.
+    """
     problems = [
         line.strip()
-        for line in warn_file.read_text(encoding="utf-8", errors="replace").splitlines()
+        for line in output.splitlines()
         if "ERROR: Hidden import" in line
     ]
     if problems:
@@ -152,7 +151,7 @@ def check_warnings(warn_file: Path) -> None:
             _log(f"  {problem}")
         _fail(
             "hidden imports named in the spec do not exist. Correct the module "
-            "names, or remove them if the platform does not need them."
+            "names, or remove them if this platform does not need them."
         )
 
     _log("all declared hidden imports resolved")
@@ -167,7 +166,9 @@ def run_pyinstaller(python: Path, version: str) -> Path:
     _log(f"dist: {DIST_DIR}")
     _log(f"work: {WORK_DIR}")
 
-    subprocess.run(
+    # Output is captured so an unresolvable hidden import can be detected.
+    # PyInstaller reports those at ERROR level but still emits a binary.
+    result = subprocess.run(
         [
             str(python),
             "-m",
@@ -180,15 +181,22 @@ def run_pyinstaller(python: Path, version: str) -> Path:
             str(WORK_DIR),
         ],
         cwd=ROOT,
-        check=True,
+        capture_output=True,
+        text=True,
     )
+    if result.stdout:
+        print(result.stdout, end="")
+    if result.stderr:
+        print(result.stderr, end="", file=sys.stderr)
+    if result.returncode != 0:
+        _fail(f"PyInstaller exited with code {result.returncode}")
 
     # onedir builds land at <distpath>/smart-organizer/
     bundle = DIST_DIR / "smart-organizer"
     if not bundle.is_dir():
         _fail(f"expected build output at {bundle}, but it was not produced")
 
-    check_warnings(SPEC_FILE.parent / "_build_warnings.txt")
+    check_hidden_imports((result.stdout or "") + (result.stderr or ""))
 
     return bundle
 
