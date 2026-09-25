@@ -1,7 +1,7 @@
 name: Release
 
-# Turns a green Build of a version tag into a downloadable release, and
-# publishes the manifest the update check reads.
+# Turns a green Build of a version tag into a downloadable release, including
+# the manifest the update check reads.
 #
 # It reuses the artifacts the Build workflow already produced rather than
 # rebuilding, so a release is exactly the set of binaries that passed the
@@ -34,12 +34,6 @@ jobs:
   release:
     name: Publish the release
     runs-on: ubuntu-latest
-    outputs:
-      # Whether this run actually published something. A step output is not
-      # visible to another job, and a job whose steps were all skipped still
-      # reports success, so without this the Pages job would try to deploy a
-      # manifest that was never generated, on every push.
-      published: ${{ steps.target.outputs.skip != 'true' && !(github.event_name == 'workflow_dispatch' && inputs.dry_run) }}
     permissions:
       # Creating and replacing the release.
       contents: write
@@ -213,7 +207,11 @@ jobs:
 
           # The shape is what update_service.Release expects, so the update
           # check parses what is published here rather than something similar.
-          cat > manifest/latest.json <<JSON
+          #
+          # It is written beside the assets because it is published as one: the
+          # update check reads a stable releases/latest/download URL, which
+          # only resolves if the manifest is an asset of the latest release.
+          cat > release/latest.json <<JSON
           {
             "version": "${TAG#v}",
             "published_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
@@ -231,9 +229,9 @@ jobs:
           TAG: ${{ steps.target.outputs.tag }}
         run: |
           echo "tag: ${TAG}"
-          cat manifest/latest.json
+          cat release/latest.json
           if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ] && [ "${DRY_RUN}" = "true" ]; then
-            echo "dry run: stopping before creating the release and deploying the site."
+            echo "dry run: stopping before creating the release."
           fi
 
       # A re-run after a partial failure has to replace the assets rather than
@@ -260,29 +258,3 @@ jobs:
               --verify-tag \
               --generate-notes
           fi
-
-      - name: Upload the manifest
-        if: steps.target.outputs.skip != 'true' && !(github.event_name == 'workflow_dispatch' && inputs.dry_run)
-        uses: actions/upload-pages-artifact@v5
-        with:
-          path: manifest/latest.json
-
-  pages:
-    name: Deploy the update manifest
-    needs: release
-    if: needs.release.outputs.published == 'true'
-    runs-on: ubuntu-latest
-    permissions:
-      pages: write
-      id-token: write
-    # Pages has to be enabled once in the repository settings, which no
-    # workflow can do on its own. The release is already published by this
-    # point, so a failure here is reported without implying the release failed.
-    continue-on-error: true
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - name: Deploy
-        id: deployment
-        uses: actions/deploy-pages@v5

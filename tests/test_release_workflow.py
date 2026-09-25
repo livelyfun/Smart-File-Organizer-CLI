@@ -149,47 +149,16 @@ def test_the_triggering_run_is_passed_in_from_the_payload(release):
 
 
 def test_release_holds_only_the_permissions_it_needs(release):
-    """The release job writes a release; the Pages job deploys the site.
+    """Creating a release and reading another run's artifacts, nothing more.
 
-    Nothing here needs to modify the repository contents beyond the release
-    itself, and the job that deploys must not be able to create releases.
+    In particular no deployment permission: the manifest is published as a
+    release asset, so there is no site to deploy and no id-token to hold.
     """
-    release_job = release["jobs"]["release"]["permissions"]
-    pages_job = release["jobs"]["pages"]["permissions"]
+    permissions = release["jobs"]["release"]["permissions"]
 
-    assert set(release_job) == {"contents", "actions"}
-    assert release_job["contents"] == "write"
-    assert release_job["actions"] == "read"
-
-    assert set(pages_job) == {"pages", "id-token"}
-    assert "contents" not in pages_job
-
-
-def test_pages_failure_does_not_hide_a_published_release(release):
-    """Pages needs a one-time manual setting, so its failure is survivable.
-
-    The release is already published when this job starts. Failing the whole
-    workflow afterwards would read as "the release failed" when it did not.
-    """
-    assert release["jobs"]["pages"]["continue-on-error"] is True
-
-
-def test_the_manifest_is_only_deployed_after_a_release_was_published(release):
-    """A push that released nothing must not attempt a deployment.
-
-    Every step of the release job is skipped when there is no version tag, and
-    a job whose steps were all skipped still reports success, so the Pages job
-    cannot tell the difference on its own. Left ungated it runs on every push
-    and fails looking for a manifest that was never written, which is noise
-    that would hide a real deployment failure.
-    """
-    output = release["jobs"]["release"]["outputs"]["published"]
-
-    assert "steps.target.outputs.skip" in output, (
-        "the published output has to account for the skip that a tagless push takes"
-    )
-    assert "inputs.dry_run" in output, "a dry run publishes nothing, so it deploys nothing"
-    assert release["jobs"]["pages"]["if"] == "needs.release.outputs.published == 'true'"
+    assert set(permissions) == {"contents", "actions"}
+    assert permissions["contents"] == "write"
+    assert permissions["actions"] == "read"
 
 
 def test_release_takes_the_artifacts_the_build_uploaded(release, build):
@@ -305,6 +274,7 @@ def test_release_assets_exclude_the_bundle_and_need_sidecars(release, bash, tmp_
         f"SmartFileOrganizer-{VERSION}-macos.dmg.sha256",
         f"SmartFileOrganizer-{VERSION}-setup.exe",
         f"SmartFileOrganizer-{VERSION}-setup.exe.sha256",
+        "latest.json",
         f"smart-organizer-{VERSION}-linux-x86_64.tar.xz",
         f"smart-organizer-{VERSION}-linux-x86_64.tar.xz.sha256",
     ]
@@ -350,11 +320,12 @@ def test_an_asset_without_a_sidecar_fails_the_release(release, bash, tmp_path):
 
 
 @pytest.mark.skipif(shutil.which("bash") is None, reason="bash is needed to run the step")
-def test_manifest_is_kept_out_of_the_release_assets(release, bash, tmp_path):
-    """latest.json is deployed to Pages, not attached to the release.
+def test_the_manifest_is_published_as_a_release_asset(release, bash, tmp_path):
+    """latest.json is attached to the release, so the update URL resolves.
 
-    Two copies of the manifest can disagree when the Pages deployment fails,
-    and the update check is documented to read the Pages one.
+    The update check reads releases/latest/download/latest.json. That URL only
+    resolves if the manifest is an asset of the latest release, so keeping it
+    out of the release would leave the update check reading a 404 forever.
     """
     _stage_downloads(tmp_path, [f"smart-organizer-{VERSION}-linux-x86_64.tar.xz"])
 
@@ -362,12 +333,10 @@ def test_manifest_is_kept_out_of_the_release_assets(release, bash, tmp_path):
     env = {"RELEASE_RUN_ID": "1", "TAG": f"v{VERSION}", "GITHUB_REPOSITORY": REPOSITORY}
     assert _run(bash, script, env=env, cwd=tmp_path).returncode == 0
 
-    assert not (tmp_path / "release" / "latest.json").exists()
-    assert (tmp_path / "manifest" / "latest.json").is_file()
+    assert (tmp_path / "release" / "latest.json").is_file()
 
     create = _step(release, "release", "Create the GitHub release")["run"]
     assert "release/*" in create
-    assert "manifest" not in create
 
 
 @pytest.mark.skipif(shutil.which("bash") is None, reason="bash is needed to run the step")
@@ -387,7 +356,7 @@ def test_published_manifest_is_readable_by_the_update_check(release, bash, tmp_p
     assert _run(bash, script, env=env, cwd=tmp_path).returncode == 0
 
     published = Release.from_manifest(
-        json.loads((tmp_path / "manifest" / "latest.json").read_text(encoding="utf-8"))
+        json.loads((tmp_path / "release" / "latest.json").read_text(encoding="utf-8"))
     )
 
     assert published.version == VERSION
@@ -397,16 +366,24 @@ def test_published_manifest_is_readable_by_the_update_check(release, bash, tmp_p
 def test_update_service_reads_the_manifest_the_release_publishes(release):
     """The published location is the one the application checks.
 
-    update_service already points at GitHub Pages. A manifest published
-    anywhere else, such as an asset on the release, would never be read.
+    The update service points at releases/latest/download/latest.json, which
+    only resolves if the manifest is attached to the latest release. The two
+    sides name the same URL, so a change to either is caught here rather than
+    by an installed copy silently reporting no update.
     """
     from smart_organizer.application.services.update_service import DEFAULT_MANIFEST_URL
 
-    assert "github.io" in DEFAULT_MANIFEST_URL
+    assert DEFAULT_MANIFEST_URL.endswith("/releases/latest/download/latest.json")
 
-    upload = _step(release, "release", "Upload the manifest")
-    assert upload["uses"].startswith("actions/upload-pages-artifact")
-    assert upload["with"]["path"] == "manifest/latest.json"
+    collect = _step(release, "release", "Collect the release assets")["run"]
+    assert "release/latest.json" in collect, (
+        "the manifest must be written beside the assets so the same glob "
+        "attaches it to the release"
+    )
+    create = _step(release, "release", "Create the GitHub release")["run"]
+    assert "release/*" in create, "the manifest is only reachable if it is attached"
+
+    assert "pages" not in yaml.dump(release), "the manifest no longer needs a site of its own"
 
 
 def test_gh_is_told_which_repository(release):

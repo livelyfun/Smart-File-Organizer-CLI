@@ -20,8 +20,14 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Optional
 
+# A release asset rather than a page of its own. GitHub redirects
+# releases/latest to the newest non-prerelease release, so this URL is stable
+# across releases and does not move when a tag is added, and it needs no
+# hosting of its own. Serving the manifest as a page instead would mean a
+# deployment that can fail independently of the release, and a site whose only
+# content is a JSON file.
 DEFAULT_MANIFEST_URL = (
-    "https://livelyfun.github.io/Smart-File-Organizer-CLI/latest.json"
+    "https://github.com/livelyfun/Smart-File-Organizer-CLI/releases/latest/download/latest.json"
 )
 
 # Deliberately small. This is a metadata fetch on a user-facing command, so

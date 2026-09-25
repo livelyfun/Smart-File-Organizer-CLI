@@ -173,7 +173,8 @@ that succeeds, `Release` fires on the finished run and does the rest:
 - Attaches each installer with its `.sha256` sidecar. An artifact without a
   sidecar fails the release, because both installers refuse to install a
   download they cannot verify.
-- Publishes `latest.json` to GitHub Pages, which is what `--check-update` reads:
+- Attaches `latest.json` alongside the installers, which is what
+  `--check-update` reads:
 
 ```json
 {
@@ -183,8 +184,21 @@ that succeeds, `Release` fires on the finished run and does the rest:
 }
 ```
 
-`update_service.py` reads that manifest and nothing else, so publishing it is
-the only step needed for `--check-update` to start reporting the release.
+`update_service.py` reads that manifest and nothing else, so attaching it is the
+only step needed for `--check-update` to start reporting the release.
+
+The manifest is a release asset rather than a page of its own, so the update
+check reads
+
+```
+https://github.com/livelyfun/Smart-File-Organizer-CLI/releases/latest/download/latest.json
+```
+
+GitHub redirects `releases/latest` to the newest non-prerelease release, so that
+URL is stable across releases and does not change when a tag is added. Serving
+it from a page instead would mean a deployment that can fail independently of
+the release, a site whose only content is a JSON file, and a repository setting
+that has to be flipped by hand.
 
 ### Trying the release workflow without publishing
 
@@ -197,11 +211,12 @@ The workflow's shell steps are covered by `tests/test_release_workflow.py`,
 which runs them against a synthetic artifact tree, because CI cannot exercise a
 workflow that publishes a real release.
 
-### One-time setup
+### Re-running a release
 
-GitHub Pages has to be enabled once in the repository settings, with
-**Settings → Pages → Build and deployment → Source: GitHub Actions**. Until
-that is done the release is published but the manifest is not, so
-`--check-update` will keep reporting no update. The Pages job is marked
-`continue-on-error` so this misconfiguration is reported without making a
-correctly published release look failed.
+Re-running a failed `Release` replaces the assets of the release that already
+exists rather than refusing to create it a second time, so a failure partway
+through is recovered by running the workflow again with the same `run_id`.
+
+`--latest` is deliberately never passed to `gh release create`. The workflow can
+be re-run against an older tag, and `install.sh` follows whatever GitHub marks
+as the latest release, so forcing it would offer users a downgrade.
