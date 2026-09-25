@@ -94,24 +94,31 @@ begin
 end;
 
 { Removes only this application's entry from the user PATH, leaving every
-  other entry untouched and in its original order. }
+  other entry untouched and in its original order.
+
+  The value is wrapped in semicolons so that an entry at either end still
+  has a delimiter on both sides, which makes the match uniform. The
+  separators that wrapping adds are stripped again afterwards. }
 procedure RemoveFromPath(Param: string);
 var
   OrigPath: string;
+  Wrapped: string;
   NewPath: string;
-  Position: Integer;
+  P: Integer;
 begin
   if not RegQueryStringValue(HKEY_CURRENT_USER, 'Environment', 'Path', OrigPath) then
     exit;
 
-  Position := Pos(';' + Param + ';', ';' + OrigPath + ';');
-  if Position = 0 then
+  Wrapped := ';' + OrigPath + ';';
+  P := Pos(';' + Param + ';', Wrapped);
+  if P = 0 then
     exit;
 
-  { Position points at the delimiter before Param, so keep everything to its
-    left and drop Param plus that delimiter. }
-  NewPath := Copy(OrigPath, 1, Position - 1);
-  Delete(NewPath, Position, Max(Length(Param) + 1, Length(NewPath)));
+  { Keep the separator that precedes Param so the surrounding entries stay
+    separated, then append everything after the match. }
+  NewPath := Copy(Wrapped, 2, P - 1) + Copy(Wrapped, P + Length(Param) + 2, MaxInt);
+  if (Length(NewPath) > 0) and (NewPath[Length(NewPath)] = ';') then
+    Delete(NewPath, Length(NewPath), 1);
 
   RegWriteExpandStringValue(HKEY_CURRENT_USER, 'Environment', 'Path', NewPath);
 end;
