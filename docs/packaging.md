@@ -40,7 +40,13 @@ incompatible PyInstaller must not be able to change what ships.
 | --- | --- | --- |
 | Linux | `smart-organizer-<ver>-linux-x86_64.tar.xz` + `.sha256` | `tar` |
 | macOS | `SmartFileOrganizer-<ver>-macos.dmg` + `.sha256` | `hdiutil` |
-| Windows | `SmartFileOrganizer-<ver>-setup.exe` | Inno Setup (`iscc`) |
+| Windows | `SmartFileOrganizer-<ver>-setup.exe` + `.sha256` | Inno Setup (`iscc`) |
+
+Every artifact gets a `.sha256` sidecar from a single call site in
+`build.py`, so one platform cannot ship without it. The sidecar is the format
+`sha256sum` writes, and both install scripts refuse to install a download whose
+digest does not match. The Build workflow fails the build if any artifact is
+missing its sidecar.
 
 Linux uses a tarball rather than an AppImage. AppImage needs FUSE to launch,
 is awkward to extract without it, and expects a desktop entry that a command

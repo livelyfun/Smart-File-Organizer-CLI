@@ -43,6 +43,10 @@ BUILD_REQUIREMENTS = ".[build]"
 # The executable name, used in installer scripts and generated documentation.
 APP_NAME = "smart-organizer"
 
+# Checksums are streamed rather than read in one go: a release artifact is
+# tens of megabytes, and the build should not have to hold one in memory.
+CHECKSUM_CHUNK_BYTES = 1024 * 1024
+
 # Text embedded in the generated installers. Kept here so the build is the
 # single place that decides what users are told at install time.
 _INSTALL_COMMAND = """#!/bin/sh
@@ -332,6 +336,37 @@ def report(bundle: Path, executable: Path) -> None:
     _log("next: python packaging/smoke_test.py " + str(executable))
 
 
+def write_checksum(artifact: Path) -> Path:
+    """Write a SHA-256 sidecar next to a release artifact and return its path.
+
+    The install scripts download this sidecar alongside the artifact and
+    refuse to install anything whose digest does not match, so an artifact
+    published without one is uninstallable rather than merely unverified.
+
+    Every builder returns its artifact here instead of writing its own
+    checksum. Keeping it to one call site is the point: when each builder
+    emitted its own, the macOS DMG and the Windows installer were published
+    with no sidecar and neither installer could run.
+    """
+    if not artifact.is_file():
+        _fail(f"cannot checksum {artifact}: it is not a file")
+
+    digest = hashlib.sha256()
+    with open(artifact, "rb") as handle:
+        for chunk in iter(lambda: handle.read(CHECKSUM_CHUNK_BYTES), b""):
+            digest.update(chunk)
+
+    # Append rather than with_suffix(): a version such as "1.2.0" contains
+    # dots, so with_suffix() would replace part of the name instead of adding
+    # to it.
+    sidecar = artifact.with_name(f"{artifact.name}.sha256")
+    # Two spaces is the sha256sum format, which both installers rely on:
+    # install.sh reads the first whitespace-separated field, and so does
+    # install.ps1, so "sha256sum -c" also works for anyone verifying by hand.
+    sidecar.write_text(f"{digest.hexdigest()}  {artifact.name}\n", encoding="utf-8")
+    return sidecar
+
+
 def build_windows_installer(version: str) -> Optional[Path]:
     """Compile the Inno Setup script into Setup.exe.
 
@@ -442,12 +477,14 @@ def build_macos_dmg(bundle: Path, version: str) -> Optional[Path]:
 
 
 def build_linux_archive(bundle: Path, version: str) -> Optional[Path]:
-    """Package the bundle as a compressed archive with checksums.
+    """Package the bundle as a compressed archive.
 
     A tarball rather than an AppImage on purpose. AppImage needs FUSE to
     launch and awkward extraction otherwise, and it wants a desktop entry,
     which a command line tool has no use for. An archive drops cleanly into
     a PATH directory and is the more honest fit for a CLI.
+
+    The SHA-256 sidecar is added by main() for every artifact alike.
     """
     if not platform.system().startswith("Linux"):
         return None
@@ -476,11 +513,6 @@ def build_linux_archive(bundle: Path, version: str) -> Optional[Path]:
     subprocess.run(
         ["tar", "-cJf", str(archive), "-C", str(DIST_DIR), archive_base.name],
         check=True,
-    )
-
-    digest = hashlib.sha256(archive.read_bytes()).hexdigest()
-    (DIST_DIR / f"{archive.name}.sha256").write_text(
-        f"{digest}  {archive.name}\n", encoding="utf-8"
     )
     return archive
 
@@ -545,6 +577,10 @@ def main(argv: list[str] | None = None) -> int:
         for artifact in built:
             if artifact:
                 _log(f"installer: {artifact}")
+                # One checksum call site for every platform, so an artifact
+                # can never be published without the sidecar the installers
+                # require.
+                _log(f"checksum:  {write_checksum(artifact)}")
 
     return 0
 

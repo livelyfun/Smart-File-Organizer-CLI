@@ -53,6 +53,29 @@ jobs:
       - name: Build standalone executable
         run: python packaging/build.py --clean --installer
 
+      # Both install scripts download a .sha256 sidecar next to the artifact
+      # and refuse to install anything they cannot verify, so an artifact
+      # without one is uninstallable rather than merely unverified. Caught
+      # here, this costs a red build instead of a user reporting that the
+      # installer downloaded something it would not install.
+      - name: Verify release checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          artifacts=(packaging/output/*.tar.xz packaging/output/*.dmg packaging/output/*.exe)
+          if [ ${#artifacts[@]} -eq 0 ]; then
+            echo "error: no release artifacts were produced" >&2
+            exit 1
+          fi
+          for artifact in "${artifacts[@]}"; do
+            if [ ! -f "${artifact}.sha256" ]; then
+              echo "error: missing checksum sidecar ${artifact}.sha256" >&2
+              exit 1
+            fi
+            echo "ok: $(basename "${artifact}")"
+          done
+
       # The behavioural gate. A bundle that starts but cannot watch is the
       # failure this application is most likely to ship, so it is checked
       # explicitly rather than inferred from a successful build.
