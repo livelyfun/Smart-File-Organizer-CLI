@@ -41,8 +41,8 @@ ArchitecturesInstallIn64BitMode=x64compatible
 UninstallDisplayIcon={app}\{#AppExe}
 SetupIconFile=..\pyinstaller\app.ico
 ; Unsigned for now. Signing needs a code-signing certificate, which this
-; project does not have; see docs/packaging.md.
-SignTool=
+; project does not have; see docs/packaging.md. No SignTool directive is
+; present because an empty one is rejected by the compiler.
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
 

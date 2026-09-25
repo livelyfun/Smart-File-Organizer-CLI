@@ -40,6 +40,9 @@ WORK_DIR = ROOT / "build"
 # version is read from the package itself, so nothing is duplicated here.
 BUILD_REQUIREMENTS = ".[build]"
 
+# The executable name, used in installer scripts and generated documentation.
+APP_NAME = "smart-organizer"
+
 # Text embedded in the generated installers. Kept here so the build is the
 # single place that decides what users are told at install time.
 _INSTALL_COMMAND = """#!/bin/sh
@@ -378,6 +381,18 @@ def _find_inno_compiler() -> str | None:
     return None
 
 
+def _render(template: str, **values: str) -> str:
+    """Fill a template, failing loudly on an unused placeholder.
+
+    A silently unfilled {placeholder} would ship to users inside an
+    installer, so an unexpected key is an error rather than a no-op.
+    """
+    try:
+        return template.format(**values)
+    except (KeyError, IndexError) as exc:
+        _fail(f"installer template has an unfilled placeholder: {exc}")
+
+
 def build_macos_dmg(bundle: Path, version: str) -> Optional[Path]:
     """Wrap the bundle in a DMG containing a guided installer.
 
@@ -400,11 +415,13 @@ def build_macos_dmg(bundle: Path, version: str) -> Optional[Path]:
     launcher.chmod(0o755)
 
     (stage / "install.command").write_text(
-        _INSTALL_COMMAND.format(app_name="smart-organizer"),
+        _INSTALL_COMMAND.format(app_name=APP_NAME),
         encoding="utf-8",
     )
     (stage / "install.command").chmod(0o755)
-    (stage / "README.txt").write_text(_DMG_README.format(version=version), encoding="utf-8")
+    (stage / "README.txt").write_text(
+        _DMG_README.format(version=version, app_name=APP_NAME), encoding="utf-8"
+    )
 
     dmg = DIST_DIR / f"SmartFileOrganizer-{version}-macos.dmg"
     if dmg.exists():
@@ -447,7 +464,7 @@ def build_linux_archive(bundle: Path, version: str) -> Optional[Path]:
     )
     (release_dir / "README.md").write_text(_ARCHIVE_README.format(version=version), encoding="utf-8")
     (release_dir / "install.sh").write_text(
-        _LINUX_INSTALL_SH.format(app_name="smart-organizer"), encoding="utf-8"
+        _LINUX_INSTALL_SH.format(app_name=APP_NAME), encoding="utf-8"
     )
     (release_dir / "install.sh").chmod(0o755)
 

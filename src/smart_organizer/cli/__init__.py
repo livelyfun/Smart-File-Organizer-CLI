@@ -16,7 +16,12 @@ from datetime import datetime
 from typing import Optional, Sequence
 
 from smart_organizer import __version__
-from smart_organizer.application import EventBus, OrganizerService
+from smart_organizer.application import (
+    EventBus,
+    OrganizerService,
+    UpdateStatus,
+    check_for_update,
+)
 from smart_organizer.application.services.events import (
     FileErrorEvent,
     FileOrganizedEvent,
@@ -62,6 +67,14 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Show current configuration and watch directory accessibility. "
             "Does not report whether the watcher process is running."
+        ),
+    )
+    parser.add_argument(
+        "--check-update",
+        action="store_true",
+        help=(
+            "Check whether a newer release is available, then exit. "
+            "Reports only; it never downloads or installs anything."
         ),
     )
     parser.add_argument(
@@ -137,6 +150,31 @@ def display_status(config: AppConfig, custom_config_path: Optional[str] = None) 
     print()
 
 
+def display_update_status(status: UpdateStatus) -> None:
+    """Render the outcome of an update check.
+
+    An unreachable or malformed manifest is reported as advisory
+    information rather than an error, because this command is optional and
+    must never imply the user's actual work has gone wrong.
+    """
+    print(f"\nSmart File Organizer v{status.current_version} - Update Check\n")
+
+    if not status.checked:
+        print("  Could not reach the update server.")
+        print("  This is not a problem with your installation; you are running")
+        print("  the latest version this build knows about.")
+        print()
+        return
+
+    if status.update_available:
+        print(f"  A newer version is available: v{status.latest_version}")
+        print("  This build does not update itself. To upgrade, download the")
+        print("  new release from the project page and install it over this copy.")
+    else:
+        print("  You are running the latest release.")
+    print()
+
+
 def _build_service(config: AppConfig) -> OrganizerService:
     """Composes the service with a file logger and a console event renderer.
 
@@ -175,6 +213,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     """Main CLI entrypoint function."""
     parser = build_parser()
     args = parser.parse_args(argv)
+
+    # Checked before any configuration is read, so it still works when the
+    # watch directory is missing or the config file is unreadable.
+    if args.check_update:
+        display_update_status(check_for_update(__version__))
+        return 0
 
     try:
         config = load_config(
