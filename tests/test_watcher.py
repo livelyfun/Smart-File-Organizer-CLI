@@ -148,20 +148,24 @@ def test_duplicate_event_deduplication(tmp_path: Path):
     watch_dir = tmp_path / "Downloads"
     watch_dir.mkdir()
 
-    dispatched = []
-    handler = _make_handler(watch_dir, dispatched)
+    config = AppConfig(watch_directory=str(watch_dir), ignore_hidden_files=True)
+    classifier = FileClassifier()
 
     submitted = []
-    original_handle = handler._handle_path_candidate
 
-    def tracking_handle(path_str):
-        submitted.append(path_str)
-        original_handle(path_str)
+    class _SpyExecutor:
+        def submit(self, fn, *args, **kwargs):
+            submitted.append(args[0])
 
-    handler._handle_path_candidate = tracking_handle
+    handler = DownloadEventHandler(
+        config,
+        classifier,
+        on_file_ready=lambda path: None,
+        executor=_SpyExecutor(),
+    )
 
-    path = str(watch_dir / "photo.jpg")
-    event = _FakeEvent(src_path=path)
+    path = watch_dir / "photo.jpg"
+    event = _FakeEvent(src_path=str(path))
 
     # First event adds to _active_files and submits
     handler.on_created(event)
