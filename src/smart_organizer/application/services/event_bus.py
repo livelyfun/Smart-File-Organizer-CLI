@@ -50,3 +50,6 @@ class EventBus:
                     f"[event-bus] subscriber {getattr(callback, '__name__', callback)!r} "
                     f"raised an error while handling {event.name}: {exc}\n"
                 )
+
+
+__all__ = ["EventBus", "EventCallback"]

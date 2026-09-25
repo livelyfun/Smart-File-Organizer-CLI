@@ -9,7 +9,44 @@ import logging
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Protocol, runtime_checkable
+
+
+@runtime_checkable
+class OrganizerLoggerProtocol(Protocol):
+    """Structural contract the core engine requires for reporting outcomes.
+
+    The engine never depends on a concrete logger. The default console/file
+    implementation lives in this module, while the application layer supplies
+    an adapter that forwards the same calls to the event bus.
+    """
+
+    def log_organized(
+        self,
+        filename: str,
+        category: str,
+        dest_rel_path: str,
+        full_dest_path: Optional[str] = None,
+    ) -> None:
+        """Reports a file that was successfully moved into a category."""
+        ...
+
+    def log_skipped(self, filename: str, reason: str) -> None:
+        """Reports a file that was deliberately skipped."""
+        ...
+
+    def log_error(
+        self,
+        filename: str,
+        error_message: str,
+        category: Optional[str] = None,
+    ) -> None:
+        """Reports a file that could not be organized."""
+        ...
+
+    def log_info(self, message: str) -> None:
+        """Reports general information."""
+        ...
 
 
 class OrganizerLogger:
@@ -98,3 +135,11 @@ def get_logger() -> OrganizerLogger:
     if _logger_instance is None:
         _logger_instance = OrganizerLogger()
     return _logger_instance
+
+
+__all__ = [
+    "OrganizerLogger",
+    "OrganizerLoggerProtocol",
+    "get_logger",
+    "setup_logger",
+]

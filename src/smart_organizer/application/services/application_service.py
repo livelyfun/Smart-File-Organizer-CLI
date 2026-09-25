@@ -18,7 +18,7 @@ from smart_organizer.application.services.events import (
 )
 from smart_organizer.application.services.event_logger import EventEmitterLogger
 from smart_organizer.core.config import AppConfig
-from smart_organizer.core.logger import OrganizerLogger
+from smart_organizer.core.logger import OrganizerLoggerProtocol
 from smart_organizer.core.organizer import SmartFileOrganizer
 
 
@@ -33,18 +33,34 @@ class OrganizerService:
     def __init__(
         self,
         config: AppConfig,
-        logger: Optional[OrganizerLogger] = None,
+        logger: Optional[OrganizerLoggerProtocol] = None,
         bus: Optional[EventBus] = None,
     ) -> None:
         self.config = config
         self.bus = bus or EventBus()
-        self.logger = logger or EventEmitterLogger(self.bus)
+        self.logger = self._build_logger(logger)
         self._organizer: Optional[SmartFileOrganizer] = None
 
         self._lock = threading.Lock()
         self._running = False
         self._stop_event: Optional[threading.Event] = None
         self._thread: Optional[threading.Thread] = None
+
+    def _build_logger(
+        self,
+        logger: Optional[OrganizerLoggerProtocol],
+    ) -> OrganizerLoggerProtocol:
+        """Returns a logger that always reports through the event bus.
+
+        A caller-supplied logger is kept as the persistent sink and wrapped, so
+        per-file outcomes reach frontend subscribers instead of being printed
+        straight to the console.
+        """
+        if logger is None:
+            return EventEmitterLogger(self.bus)
+        if isinstance(logger, EventEmitterLogger):
+            return logger
+        return EventEmitterLogger(self.bus, file_logger=logger)
 
     @property
     def organizer(self) -> SmartFileOrganizer:
@@ -95,10 +111,22 @@ class OrganizerService:
             self._thread = thread
             self._running = True
 
-        thread.start()
+        # Publish outside the lock: subscribers may call back into this service.
+        # Announced before the worker starts so a fast-failing watcher cannot
+        # emit monitoring_stopped ahead of monitoring_started.
         self.bus.publish(
             MonitoringStartedEvent(watch_directory=str(self.config.resolved_watch_directory))
         )
+
+        try:
+            thread.start()
+        except Exception:
+            with self._lock:
+                self._running = False
+                self._stop_event = None
+                self._thread = None
+            self.bus.publish(MonitoringStoppedEvent())
+            raise
 
     def _monitor_loop(self, stop_event: threading.Event) -> None:
         """Background worker running the core monitoring loop."""
@@ -108,7 +136,15 @@ class OrganizerService:
             self.logger.log_error(filename="", error_message=f"Watcher stopped due to error: {exc}")
         finally:
             with self._lock:
+                was_running = self._running
                 self._running = False
+                self._stop_event = None
+                self._thread = None
+
+            # stop() publishes this itself; only announce a worker that ended
+            # on its own, so frontends never keep a stale "running" indicator.
+            if was_running and not stop_event.is_set():
+                self.bus.publish(MonitoringStoppedEvent())
 
     def stop(self) -> bool:
         """Stops live monitoring and waits for the watcher thread to finish.
