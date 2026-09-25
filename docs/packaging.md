@@ -56,6 +56,13 @@ macOS ships a DMG containing the executable and an `install.command` that
 puts it on PATH. There is no `.app` bundle, because a CLI gains nothing from
 Finder integration and it would add a signing obligation for no benefit.
 
+The volume root holds one directory, `Smart File Organizer/`, with the
+executable inside it, because the image is created from that directory rather
+than from its contents. `scripts/install.sh` has to reach through it, so the
+Build workflow mounts the finished DMG and runs the executable out of it; the
+name is asserted against `build.py` by `tests/test_packaging_layout.py`, since
+neither script can import the other.
+
 Windows needs the Inno Setup compiler, installed in CI with
 `choco install innosetup`.
 

@@ -23,6 +23,15 @@ APP_NAME="smart-organizer"
 REPO="livelyfun/Smart-File-Organizer-CLI"
 RELEASES_API="https://api.github.com/repos/${REPO}/releases/latest"
 
+# Interpreter used by --from-source. The prebuilt path below never needs one.
+PYTHON="${PYTHON_BIN:-python3}"
+
+# The macOS DMG mounts a directory at the root of its volume, and the
+# executable sits inside it. The build stages the image from that directory,
+# so this name has to match packaging/build.py's DMG_VOLUME_NAME; see
+# tests/test_packaging_layout.py.
+DMG_VOLUME_DIR="Smart File Organizer"
+
 # Per-user install locations. Chosen to match the convention a user's shell
 # profile already has on PATH, so no rc file has to be edited.
 INSTALL_ROOT="${HOME}/.local/share/smart-organizer"
@@ -41,23 +50,6 @@ usage() {
     sed -n '2,18p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
     exit 0
 }
-
-while [ $# -gt 0 ]; do
-    case "$1" in
-        --from-source) FROM_SOURCE=true ;;
-        --system)     SYSTEM=true ;;
-        --version)    shift; VERSION="${1:-}" ;;
-        --version=*)  VERSION="${1#*=}" ;;
-        -h|--help)    usage ;;
-        *)            die "unknown option: $1 (try --help)" ;;
-    esac
-    shift
-done
-
-if [ "$SYSTEM" = true ]; then
-    INSTALL_ROOT="/usr/local/share/${APP_NAME}"
-    BIN_DIR="/usr/local/bin"
-fi
 
 # Run a command with sudo only when the destination is not already writable.
 # Keeps the common case free of a password prompt and a root shell.
@@ -81,14 +73,23 @@ require() {
 # ---------------------------------------------------------------- source mode
 
 install_from_source() {
-    require python3
+    require "${PYTHON}"
+    # Match the floor install.ps1 enforces and pyproject's requires-python, so
+    # an old interpreter fails here with a usable message rather than part way
+    # through creating a virtual environment.
+    if ! "${PYTHON}" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 9) else 1)'; then
+        die "Python 3.9 or newer is required for this mode. Install a newer
+Python, or drop --from-source to install the prebuilt release, which needs
+no Python at all."
+    fi
+
     info "Installing from source into ${INSTALL_ROOT}"
 
     local script_dir
     script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
     mkdir -p "${INSTALL_ROOT}"
-    "${PYTHON_BIN:-python3}" -m venv "${INSTALL_ROOT}/venv"
+    "${PYTHON}" -m venv "${INSTALL_ROOT}/venv"
     "${INSTALL_ROOT}/venv/bin/pip" install --quiet --upgrade pip
     "${INSTALL_ROOT}/venv/bin/pip" install --quiet "${script_dir}"
 
@@ -203,6 +204,18 @@ install_linux() {
     install_launcher_shim
 }
 
+# Reads hdiutil attach output on stdin and prints the mount point it reported.
+#
+# hdiutil prints one line per mounted volume: the device, the filesystem type,
+# then the mount point in the last column, padded out to align the columns.
+# That padding is whitespace, but not reliably a tab, so the path is taken
+# from "/Volumes/" to the end of the line and the trailing padding trimmed.
+# The volume name can contain spaces of its own, which is why this is not a
+# whitespace split.
+parse_mount_point() {
+    grep -o '/Volumes/.*' | head -1 | sed -e 's/[[:space:]]*$//' || true
+}
+
 install_macos() {
     local version="$1" tmp mount_point=""
     tmp="$(mktemp -d)"
@@ -220,13 +233,23 @@ install_macos() {
     verify_checksum "${tmp}/${dmg}" "${expected}"
 
     require hdiutil
-    mount_point="$(hdiutil attach "${tmp}/${dmg}" -nobrowse -readonly -mountrandom | \
-                  grep -Eo '/Volumes/.*' | head -1)"
-    [ -d "${mount_point}" ] || die "could not mount ${dmg}"
+    mount_point="$(hdiutil attach "${tmp}/${dmg}" -nobrowse -readonly -mountrandom \
+                  | parse_mount_point)"
+    [ -n "${mount_point}" ] || die "could not mount ${dmg}: hdiutil reported no mount point"
+
+    # The bundle is staged inside a directory, so it is not at the volume
+    # root. Getting this path wrong copies nothing and leaves the user with
+    # an empty install directory, so it is checked before anything is made.
+    local bundled="${mount_point}/${DMG_VOLUME_DIR}/${APP_NAME}"
+    if [ ! -d "${bundled}" ]; then
+        die "${dmg} does not contain ${DMG_VOLUME_DIR}/${APP_NAME}.
+The image layout has changed, or the download is damaged. Re-run with
+--from-source, or report this on the project's issue tracker."
+    fi
 
     as_root "${INSTALL_ROOT}" mkdir -p "${INSTALL_ROOT}"
     as_root "${INSTALL_ROOT}" rm -rf "${INSTALL_ROOT}/${APP_NAME}"
-    as_root "${INSTALL_ROOT}" cp -R "${mount_point}/smart-organizer" "${INSTALL_ROOT}/${APP_NAME}"
+    as_root "${INSTALL_ROOT}" cp -R "${bundled}" "${INSTALL_ROOT}/${APP_NAME}"
 
     hdiutil detach "${mount_point}" -quiet
     mount_point=""
@@ -253,6 +276,26 @@ EOF
 }
 
 main() {
+    # Parsed here rather than at the top level so that sourcing this file is
+    # genuinely free of side effects: a test that sources it must not have its
+    # own arguments consumed and rejected as unknown options.
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --from-source) FROM_SOURCE=true ;;
+            --system)     SYSTEM=true ;;
+            --version)    shift; VERSION="${1:-}" ;;
+            --version=*)  VERSION="${1#*=}" ;;
+            -h|--help)    usage ;;
+            *)            die "unknown option: $1 (try --help)" ;;
+        esac
+        shift
+    done
+
+    if [ "$SYSTEM" = true ]; then
+        INSTALL_ROOT="/usr/local/share/${APP_NAME}"
+        BIN_DIR="/usr/local/bin"
+    fi
+
     log "=================================================="
     log "    Smart File Organizer - Installer (Unix/macOS)"
     log "=================================================="
