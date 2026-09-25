@@ -128,5 +128,3 @@ begin
   if CurUninstallStep = usUninstall then
     RemoveFromPath(ExpandConstant('{app}'));
 end;
-  Result := Pos(';' + Param + ';', ';' + OrigPath + ';') = 0;
-end;
