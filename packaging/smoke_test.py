@@ -75,7 +75,24 @@ class Harness:
         )
 
     def close(self) -> None:
-        self._tmp.cleanup()
+        """Remove the sandbox, tolerating files the OS still holds open.
+
+        Cleanup must never be the reason a build is rejected. A locked log
+        file is an artefact-teardown detail, not a verdict on the binary.
+        """
+        for attempt in range(3):
+            try:
+                self._tmp.cleanup()
+                return
+            except OSError:
+                if attempt == 2:
+                    print(
+                        f"[smoke] warning: could not fully remove sandbox {self.root}; "
+                        "leaving it in place",
+                        flush=True,
+                    )
+                    return
+                time.sleep(1.0)
 
     def run(self, *args: str, timeout: float = 60.0) -> subprocess.CompletedProcess:
         """Run the binary to completion with the sandboxed config."""
@@ -178,14 +195,42 @@ def _check_for_watcher_error(stream: str) -> None:
         )
 
 
+def _popen_kwargs() -> dict:
+    """Platform-specific Popen options for watch mode.
+
+    Windows has no signals in the POSIX sense. A console control event is
+    only delivered to a process that is the root of its own process group,
+    so the group has to be created explicitly or the event goes nowhere.
+    """
+    if os.name == "nt":
+        return {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+    return {}
+
+
+def _send_shutdown_request(process: subprocess.Popen) -> None:
+    """Ask watch mode to stop the way a user would.
+
+    The application handles SIGINT and SIGTERM. On Windows, CTRL_C_EVENT
+    is what the runtime maps onto SIGINT; CTRL_BREAK_EVENT would arrive as
+    SIGBREAK, which the application does not handle, so the process would
+    be killed outright and the clean-shutdown check would be meaningless.
+    """
+    if os.name == "nt":
+        process.send_signal(signal.CTRL_C_EVENT)
+    else:
+        process.send_signal(signal.SIGINT)
+
+
 def _terminate(process: subprocess.Popen) -> None:
     """Ask the process to stop, then make sure it actually did."""
     if process.poll() is not None:
         return
-    process.send_signal(signal.SIGINT)
     try:
+        _send_shutdown_request(process)
         process.wait(timeout=20)
-    except subprocess.TimeoutExpired:
+    except Exception:
+        # A failed graceful stop must never leave the process running: it
+        # would hold its log file open and break sandbox cleanup.
         process.kill()
         process.wait(timeout=10)
 
@@ -246,6 +291,7 @@ def check_live_watch(harness: Harness) -> None:
         stdout=output_handle,
         stderr=subprocess.STDOUT,
         text=True,
+        **_popen_kwargs(),
     )
 
     def read_output() -> str:
