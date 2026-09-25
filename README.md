@@ -345,16 +345,24 @@ smart-file-organizer/
 │   └── smart_organizer/
 │       ├── __init__.py          # Package metadata
 │       ├── __main__.py          # python -m smart_organizer entrypoint
-│       ├── cli.py               # CLI interface and arguments
-│       ├── organizer.py         # Central coordinator service
-│       ├── classifier.py        # Centralized categories and extension mappings
-│       ├── file_manager.py      # Duplicate-safe file moves (pathlib & shutil)
-│       ├── stability.py         # Multi-threaded stability detection
-│       ├── watcher.py           # Watchdog directory observer
-│       ├── config.py            # Configuration loader and validator
-│       ├── logger.py            # Aligned console output and file logger
-│       └── platform_utils.py    # Cross-platform directory resolution
-├── tests/                       # Complete pytest suite (100+ tests)
+│       ├── core/                # Shared Python engine (no console/UI logic)
+│       │   ├── organizer.py     # Central coordinator service
+│       │   ├── classifier.py    # Categories and extension mappings
+│       │   ├── file_manager.py  # Duplicate-safe file moves (pathlib & shutil)
+│       │   ├── stability.py     # Threaded stability detection
+│       │   ├── watcher.py       # Watchdog directory observer
+│       │   ├── config.py        # Configuration loader and validator
+│       │   ├── logger.py        # Console/file logger protocol
+│       │   └── platform_utils.py# Cross-platform directory resolution
+│       ├── application/
+│       │   └── services/        # Shared frontend-agnostic services
+│       │       ├── application_service.py  # OrganizerService (start/stop, events)
+│       │       ├── events.py               # Structured domain events
+│       │       ├── event_bus.py            # Thread-safe pub/sub
+│       │       └── event_logger.py         # Logger adapter -> event bus
+│       ├── cli/                 # Command-line frontend (smart-organizer)
+│       └── gui/                 # Desktop GUI (coming in a later phase)
+├── tests/                       # Complete pytest suite
 ├── scripts/
 │   ├── install.sh               # Installer for Linux & macOS
 │   └── install.ps1              # Installer for Windows
