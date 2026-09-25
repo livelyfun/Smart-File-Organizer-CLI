@@ -126,6 +126,38 @@ def clean() -> None:
         shutil.rmtree(stale, ignore_errors=True)
 
 
+def check_warnings(warn_file: Path) -> None:
+    """Fail the build if a declared hidden import could not be found.
+
+    PyInstaller logs an unresolvable hidden import at ERROR level and then
+    carries on to produce a binary anyway. The bundle looks fine until the
+    missing module is exercised at runtime, which is exactly the class of
+    defect the explicit hidden imports exist to prevent, so it is treated
+    as a build failure here instead.
+    """
+    if not warn_file.is_file():
+        _fail(
+            f"expected a PyInstaller warnings file at {warn_file}, but none was "
+            "produced; the spec may have stopped short of the Analysis step"
+        )
+
+    problems = [
+        line.strip()
+        for line in warn_file.read_text(encoding="utf-8", errors="replace").splitlines()
+        if "ERROR: Hidden import" in line
+    ]
+    if problems:
+        _log(f"{len(problems)} declared hidden import(s) could not be resolved:")
+        for problem in problems:
+            _log(f"  {problem}")
+        _fail(
+            "hidden imports named in the spec do not exist. Correct the module "
+            "names, or remove them if the platform does not need them."
+        )
+
+    _log("all declared hidden imports resolved")
+
+
 def run_pyinstaller(python: Path, version: str) -> Path:
     """Invoke PyInstaller and return the built executable path."""
     DIST_DIR.mkdir(parents=True, exist_ok=True)
@@ -155,6 +187,8 @@ def run_pyinstaller(python: Path, version: str) -> Path:
     bundle = DIST_DIR / "smart-organizer"
     if not bundle.is_dir():
         _fail(f"expected build output at {bundle}, but it was not produced")
+
+    check_warnings(SPEC_FILE.parent / "_build_warnings.txt")
 
     return bundle
 
