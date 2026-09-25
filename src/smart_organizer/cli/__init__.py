@@ -12,9 +12,9 @@ import threading
 from typing import Optional, Sequence
 
 from smart_organizer import __version__
-from smart_organizer.config import AppConfig, get_default_config_path, load_config
-from smart_organizer.logger import setup_logger
-from smart_organizer.organizer import SmartFileOrganizer
+from smart_organizer.core.config import AppConfig, get_default_config_path, load_config
+from smart_organizer.core.logger import setup_logger
+from smart_organizer.core.organizer import SmartFileOrganizer
 
 
 def build_parser() -> argparse.ArgumentParser:
