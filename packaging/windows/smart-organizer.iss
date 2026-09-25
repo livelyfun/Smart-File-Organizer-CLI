@@ -59,33 +59,67 @@ Name: "{group}\Uninstall {#AppName}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: desktopicon
 
 [Registry]
-; Adds the install directory to the user PATH without clobbering the
-; existing value. ReadRegStr/RegWriteStringValue expand the existing
-; content, so a user's other PATH entries are preserved.
+; PATH is only ever appended to, never rewritten wholesale: {olddata}
+; expands to the existing value, so the user's other entries survive.
+;
+; HKCU only. This installer defaults to a per-user install, so it has no
+; business writing HKLM, where the write would fail without elevation.
+;
+; There is deliberately no uninsdeletevalue here. That flag deletes the
+; whole "Path" value, taking every other entry on the user's PATH with it.
+; Uninstall instead removes only this application's entry, in the
+; RemoveFromPath function below.
 Root: HKCU; Subkey: "Environment"; ValueType: expandsz; ValueName: "Path"; \
     ValueData: "{olddata};{app}"; Check: NeedsAddPath(ExpandConstant('{app}')); \
     Tasks: addtopath
-Root: HKLM; Subkey: "Environment"; ValueType: expandsz; ValueName: "Path"; \
-    ValueData: "{olddata};{app}"; Check: NeedsAddPath(ExpandConstant('{app}')); \
-    Tasks: addtopath; Flags: uninsdeletevalue
 
 [Run]
 ; --version proves the installed copy actually runs before the user closes
 ; the installer, rather than discovering a broken install later.
 Filename: "{app}\{#AppExe}"; Parameters: "--version"; \
     Description: "Verifying the installation"; Flags: runhidden; \
-    StatusMsg: "Checking that {#AppName} runs..."; BeforeHalt: skipifsilent
+    StatusMsg: "Checking that {#AppName} runs..."
 
 [Code]
 function NeedsAddPath(Param: string): boolean;
 var
   OrigPath: string;
 begin
-  if not RegQueryStringValue(HKEY_CURRENT_USER, 'Environment', 'Path', OrigPath) and
-     not RegQueryStringValue(HKEY_LOCAL_MACHINE, 'Environment', 'Path', OrigPath) then
+  if not RegQueryStringValue(HKEY_CURRENT_USER, 'Environment', 'Path', OrigPath) then
   begin
     Result := True;
     exit;
   end;
+  Result := Pos(';' + Param + ';', ';' + OrigPath + ';') = 0;
+end;
+
+{ Removes only this application's entry from the user PATH, leaving every
+  other entry untouched and in its original order. }
+procedure RemoveFromPath(Param: string);
+var
+  OrigPath: string;
+  NewPath: string;
+  Position: Integer;
+begin
+  if not RegQueryStringValue(HKEY_CURRENT_USER, 'Environment', 'Path', OrigPath) then
+    exit;
+
+  Position := Pos(';' + Param + ';', ';' + OrigPath + ';');
+  if Position = 0 then
+    exit;
+
+  { Position points at the delimiter before Param, so keep everything to its
+    left and drop Param plus that delimiter. }
+  NewPath := Copy(OrigPath, 1, Position - 1);
+  Delete(NewPath, Position, Max(Length(Param) + 1, Length(NewPath)));
+
+  RegWriteExpandStringValue(HKEY_CURRENT_USER, 'Environment', 'Path', NewPath);
+end;
+
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+begin
+  if CurUninstallStep = usUninstall then
+    RemoveFromPath(ExpandConstant('{app}'));
+end;
   Result := Pos(';' + Param + ';', ';' + OrigPath + ';') = 0;
 end;

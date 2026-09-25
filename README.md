@@ -18,38 +18,80 @@ Automatically organizes completed files
 
 ## Quick Start
 
-### 1. Clone
+### Option A: Install a standalone build (no Python required)
 
-Clone the repository using Git:
+The installers download a prebuilt, self-contained executable and verify it
+against the published SHA-256 before installing anything.
+
+**Linux & macOS**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/livelyfun/Smart-File-Organizer-CLI/main/scripts/install.sh | bash
+```
+
+or, from a clone of this repository:
+
+```bash
+./scripts/install.sh
+```
+
+**Windows (PowerShell)**
+
+```powershell
+.\scripts\install.ps1
+```
+
+Useful flags: `--version 1.2.0` installs a specific release, `--system`
+installs machine-wide instead of per-user, and `--from-source` skips the
+download and builds from a checkout instead (this last one does need
+Python 3.9+).
+
+> These builds are not code signed. macOS will report that the developer
+> cannot be verified, and Windows SmartScreen will warn on first run. See
+> [docs/packaging.md](docs/packaging.md#not-yet-done-code-signing-and-notarization)
+> for what that means and how to work around it.
+
+To check for a newer release later:
+
+```bash
+smart-organizer --check-update
+```
+
+This only reports. It never downloads or installs anything.
+
+### Option B: Install from source
+
+> **Requirements**: Python 3.9+ (Python 3.12+ recommended).
 
 ```
 git clone https://github.com/livelyfun/Smart-File-Organizer-CLI.git
 cd Smart-File-Organizer-CLI
 ```
 
-Or, if you don't have Git installed, download the ZIP from GitHub (**Code → Download ZIP**), extract it, and open a terminal / PowerShell inside the extracted folder.
-
-### 2. Install
-
-Once inside the project folder, run:
+Then run the installer with `--from-source` so it builds a virtual
+environment and installs the package:
 
 #### Linux & macOS
 
-```
-./scripts/install.sh
+```bash
+./scripts/install.sh --from-source
 ```
 
 #### Windows (PowerShell)
 
-```
-.\scripts\install.ps1
+```powershell
+.\scripts\install.ps1 -FromSource
 ```
 
-> **Requirements**: Python 3.9+ (Python 3.12+ recommended).
+Or install the package directly into your own environment:
+
+```bash
+pip install .
+```
 
 ---
 
-### 3. Run
+### Run
 
 Once installed, simply run:
 
@@ -312,6 +354,18 @@ Get-ScheduledTask -TaskName "SmartFileOrganizer"
 ---
 
 ## Development & Testing
+
+### Building a standalone executable
+
+```bash
+pip install -e ".[build]"
+python packaging/build.py --clean --smoke-test --installer
+```
+
+See [docs/packaging.md](docs/packaging.md) for what each artifact is, how
+the watchdog bundling is verified, and why updates are check-and-notify
+only.
+
 
 ### Development Setup
 
