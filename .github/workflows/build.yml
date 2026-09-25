@@ -1,0 +1,67 @@
+name: Build
+
+# Proves the standalone executables actually build and work on every
+# platform. This is the only place PyInstaller runs, because the build
+# requires network access to fetch it, so this workflow is what stands
+# between a broken bundle and a release.
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Bundle on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install ".[build]"
+
+      # --clean matters: a bundle that inherits a file from an earlier run
+      # is not reproducible, and the tree checksum below is only meaningful
+      # if the output directory started empty.
+      - name: Build standalone executable
+        run: python packaging/build.py --clean
+
+      # The behavioural gate. A bundle that starts but cannot watch is the
+      # failure this application is most likely to ship, so it is checked
+      # explicitly rather than inferred from a successful build.
+      - name: Smoke test the frozen binary
+        run: python packaging/smoke_test.py packaging/output/smart-organizer
+
+      - name: Report bundle size
+        shell: bash
+        run: |
+          du -sh packaging/output/smart-organizer
+          find packaging/output/smart-organizer -type f | wc -l
+
+      - name: Upload executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: smart-organizer-${{ matrix.os }}
+          path: packaging/output/smart-organizer
+          if-no-files-found: error
+          retention-days: 7
